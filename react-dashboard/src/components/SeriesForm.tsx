@@ -268,21 +268,8 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
   const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1))
   const prev = () => setStep((s) => Math.max(s - 1, 0))
 
-  // Skip step 4 (Fréquence) for one_shot
-  const nextStep = () => {
-    if (step === 3 && form.type === 'one_shot') {
-      setStep(5)
-    } else {
-      next()
-    }
-  }
-  const prevStep = () => {
-    if (step === 5 && form.type === 'one_shot') {
-      setStep(3)
-    } else {
-      prev()
-    }
-  }
+  const nextStep = () => next()
+  const prevStep = () => prev()
 
   const handleSubmit = () => {
     onSubmit({
@@ -310,9 +297,6 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
       {/* Step indicators */}
       <div className="flex items-center mb-8">
         {STEPS.map((label, i) => {
-          // Skip step 4 display for one_shot
-          if (form.type === 'one_shot' && i === 4) return null
-          const realIndex = form.type === 'one_shot' && i > 4 ? i - 1 : i
           const isActive = i === step
           const isDone = i < step
           return (
@@ -327,7 +311,7 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
                       : 'bg-gray-200 text-gray-500'
                   }`}
                 >
-                  {isDone ? <Check size={14} /> : realIndex + 1}
+                  {isDone ? <Check size={14} /> : i + 1}
                 </div>
                 <span
                   className={`text-xs mt-1 font-medium ${
@@ -337,7 +321,7 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
                   {label}
                 </span>
               </div>
-              {i < STEPS.length - 1 && !(form.type === 'one_shot' && i === 3) && (
+              {i < STEPS.length - 1 && (
                 <div
                   className={`flex-1 h-0.5 mx-2 mb-4 ${isDone ? 'bg-green-400' : 'bg-gray-200'}`}
                 />
