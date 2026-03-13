@@ -23,8 +23,8 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
-COPY laravel-api/composer.json laravel-api/composer.lock ./
-RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
+COPY laravel-api/composer.json ./
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-lock
 
 COPY laravel-api/ .
 

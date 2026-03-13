@@ -2,8 +2,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY baileys-service/package.json baileys-service/package-lock.json ./
-RUN npm ci --production
+COPY baileys-service/package.json ./
+RUN npm install --omit=dev
 
 COPY baileys-service/ .
 
