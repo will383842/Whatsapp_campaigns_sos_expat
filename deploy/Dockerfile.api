@@ -24,11 +24,10 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www/html
 
 COPY laravel-api/composer.json ./
-RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-lock
+RUN touch .env && composer update --no-dev --no-scripts --no-autoloader --prefer-dist
 
 COPY laravel-api/ .
-
-RUN composer dump-autoload --optimize
+RUN touch .env && composer dump-autoload --optimize
 
 RUN mkdir -p /var/www/html/public-shared \
     && chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache /var/www/html/public-shared \
