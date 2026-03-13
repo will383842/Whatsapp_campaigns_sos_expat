@@ -51,6 +51,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      - ./.env.production:/var/www/html/.env:ro
       - public_shared:/var/www/html/public-shared
       - app_storage:/var/www/html/storage
     networks:
@@ -71,6 +72,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      - ./.env.production:/var/www/html/.env:ro
       - app_storage:/var/www/html/storage
     networks:
       - internal
@@ -90,6 +92,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      - ./.env.production:/var/www/html/.env:ro
       - app_storage:/var/www/html/storage
     networks:
       - internal
