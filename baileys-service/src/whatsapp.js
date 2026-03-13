@@ -39,7 +39,7 @@ export async function connectToWhatsApp() {
   sock = makeWASocket({
     version,
     auth: state,
-    browser: ['Campaigns SOS-Expat', 'Chrome', '120.0.0'],
+    browser: ['Campaigns SOS-Expat', 'Business', '120.0.0'],
     printQRInTerminal: true,
     logger: logger.child({ module: 'baileys' }),
     // Recommended for campaigns: avoid marking messages as read automatically
