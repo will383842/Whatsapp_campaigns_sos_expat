@@ -1,0 +1,156 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: wc-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_secret}
+      MYSQL_DATABASE: ${DB_DATABASE:-whatsapp_campaigns}
+      MYSQL_USER: ${DB_USERNAME:-wc_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-wc_secret}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD:-root_secret}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: wc-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 64mb
+      --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  app:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    container_name: wc-app
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - public_shared:/var/www/html/public-shared
+      - app_storage:/var/www/html/storage
+    networks:
+      - internal
+
+  queue:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    container_name: wc-queue
+    restart: unless-stopped
+    command: ["php", "artisan", "queue:work", "redis", "--queue=default", "--sleep=3", "--tries=3", "--max-time=3600"]
+    env_file:
+      - .env.production
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - app_storage:/var/www/html/storage
+    networks:
+      - internal
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    container_name: wc-scheduler
+    restart: unless-stopped
+    command: ["/bin/sh", "-c", "while true; do php artisan schedule:run --verbose; sleep 60; done"]
+    env_file:
+      - .env.production
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - app_storage:/var/www/html/storage
+    networks:
+      - internal
+
+  baileys:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.baileys
+    container_name: wc-baileys
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+      LARAVEL_API_URL: http://wc-nginx-api
+      LARAVEL_API_KEY: ${BAILEYS_API_KEY:-change_me}
+      WA_PHONE_NUMBER: ${WA_PHONE_NUMBER:-33743331201}
+      LOG_LEVEL: warn
+    depends_on:
+      - app
+    volumes:
+      - baileys_auth:/app/auth_info
+    networks:
+      - internal
+
+  nginx-api:
+    image: nginx:alpine
+    container_name: wc-nginx-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8086:80"
+    volumes:
+      - ./deploy/nginx-api.conf:/etc/nginx/conf.d/default.conf:ro
+      - public_shared:/var/www/html/public:ro
+    depends_on:
+      - app
+    networks:
+      - internal
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.frontend
+    container_name: wc-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8087:80"
+    networks:
+      - internal
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  app_storage:
+    driver: local
+  public_shared:
+    driver: local
+  baileys_auth:
+    driver: local
+
+networks:
+  internal:
+    driver: bridge

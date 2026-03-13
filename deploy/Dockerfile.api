@@ -1,0 +1,56 @@
+FROM php:8.2-fpm-alpine
+
+RUN apk add --no-cache \
+    mysql-client \
+    libzip-dev \
+    icu-dev \
+    oniguruma-dev \
+    linux-headers \
+    $PHPIZE_DEPS
+
+RUN docker-php-ext-install \
+    pdo_mysql \
+    zip \
+    intl \
+    mbstring \
+    bcmath \
+    opcache \
+    pcntl
+
+RUN pecl install redis && docker-php-ext-enable redis
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+WORKDIR /var/www/html
+
+COPY laravel-api/composer.json laravel-api/composer.lock ./
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
+
+COPY laravel-api/ .
+
+RUN composer dump-autoload --optimize
+
+RUN mkdir -p /var/www/html/public-shared \
+    && chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache /var/www/html/public-shared \
+    && chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
+
+COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+RUN echo '[www]' > /usr/local/etc/php-fpm.d/zz-custom.conf \
+    && echo 'pm = dynamic' >> /usr/local/etc/php-fpm.d/zz-custom.conf \
+    && echo 'pm.max_children = 15' >> /usr/local/etc/php-fpm.d/zz-custom.conf \
+    && echo 'pm.start_servers = 3' >> /usr/local/etc/php-fpm.d/zz-custom.conf \
+    && echo 'pm.min_spare_servers = 2' >> /usr/local/etc/php-fpm.d/zz-custom.conf \
+    && echo 'pm.max_spare_servers = 5' >> /usr/local/etc/php-fpm.d/zz-custom.conf
+
+RUN echo 'opcache.enable=1' > /usr/local/etc/php/conf.d/opcache-custom.ini \
+    && echo 'opcache.memory_consumption=128' >> /usr/local/etc/php/conf.d/opcache-custom.ini \
+    && echo 'opcache.max_accelerated_files=10000' >> /usr/local/etc/php/conf.d/opcache-custom.ini \
+    && echo 'opcache.validate_timestamps=1' >> /usr/local/etc/php/conf.d/opcache-custom.ini \
+    && echo 'opcache.revalidate_freq=2' >> /usr/local/etc/php/conf.d/opcache-custom.ini
+
+EXPOSE 9000
+
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["php-fpm"]

@@ -1,0 +1,12 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY baileys-service/package.json baileys-service/package-lock.json ./
+RUN npm ci --production
+
+COPY baileys-service/ .
+
+EXPOSE 3002
+
+CMD ["node", "src/index.js"]
