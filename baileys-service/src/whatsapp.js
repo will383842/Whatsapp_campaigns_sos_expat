@@ -3,6 +3,7 @@ import {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  Browsers,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { fileURLToPath } from 'url';
@@ -39,24 +40,24 @@ export async function connectToWhatsApp() {
   sock = makeWASocket({
     version,
     auth: state,
-    browser: ['Campaigns SOS-Expat', 'Business', '120.0.0'],
-    printQRInTerminal: true,
+    browser: Browsers.windows('Desktop'),
+    printQRInTerminal: false,
     logger: logger.child({ module: 'baileys' }),
-    // Recommended for campaigns: avoid marking messages as read automatically
     markOnlineOnConnect: false,
   });
 
   // Request pairing code if not yet registered
   if (!sock.authState.creds.registered) {
-    // Small delay to ensure the socket is ready
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     try {
-      const code = await sock.requestPairingCode(phoneNumber);
+      // Ensure phone number has no spaces/dashes/plus
+      const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
+      logger.info({ cleanPhone }, 'Requesting pairing code...');
+      const code = await sock.requestPairingCode(cleanPhone);
       logger.info({ code }, 'Pairing code — enter this in WhatsApp on your phone');
       console.log(`\n  *** PAIRING CODE: ${code} ***\n`);
-      console.log(`  You can also scan the QR code above if pairing code does not work.\n`);
     } catch (err) {
-      logger.error({ err }, 'Failed to request pairing code — use QR code instead');
+      logger.error({ err: err.message }, 'Failed to request pairing code');
     }
   }
 
