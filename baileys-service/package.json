@@ -1,0 +1,20 @@
+{
+  "name": "baileys-campaigns-service",
+  "version": "1.0.0",
+  "description": "WhatsApp campaigns sending service — SOS-Expat",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.18.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^13.0.0"
+  }
+}

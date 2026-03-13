@@ -1,0 +1,41 @@
+# ============================================================
+# WhatsApp Campaigns SOS-Expat — .gitignore
+# ============================================================
+
+# ── Baileys Service ─────────────────────────────────────────
+baileys-service/node_modules/
+baileys-service/auth_info/*
+!baileys-service/auth_info/.gitkeep
+baileys-service/logs/*
+!baileys-service/logs/.gitkeep
+baileys-service/.env
+
+# ── Laravel API ─────────────────────────────────────────────
+laravel-api/.env
+laravel-api/vendor/
+laravel-api/node_modules/
+laravel-api/storage/logs/*.log
+laravel-api/storage/app/public/
+laravel-api/bootstrap/cache/*.php
+laravel-api/.phpunit.result.cache
+
+# ── React Dashboard ─────────────────────────────────────────
+react-dashboard/node_modules/
+react-dashboard/dist/
+react-dashboard/.env
+react-dashboard/.env.local
+
+# ── OS / Editors ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+*.log
+*.swp
+*.swo
+
+# ── Secrets ─────────────────────────────────────────────────
+*.pem
+*.key
+.env
+.env.*
+!.env.example
