@@ -40,7 +40,7 @@ export async function connectToWhatsApp() {
   sock = makeWASocket({
     version,
     auth: state,
-    browser: Browsers.windows('Desktop'),
+    browser: Browsers.appropriate('Campaigns SOS-Expat'),
     printQRInTerminal: false,
     logger: logger.child({ module: 'baileys' }),
     markOnlineOnConnect: false,
