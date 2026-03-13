@@ -40,7 +40,7 @@ export async function connectToWhatsApp() {
     version,
     auth: state,
     browser: ['Campaigns SOS-Expat', 'Chrome', '120.0.0'],
-    printQRInTerminal: false,
+    printQRInTerminal: true,
     logger: logger.child({ module: 'baileys' }),
     // Recommended for campaigns: avoid marking messages as read automatically
     markOnlineOnConnect: false,
@@ -49,10 +49,15 @@ export async function connectToWhatsApp() {
   // Request pairing code if not yet registered
   if (!sock.authState.creds.registered) {
     // Small delay to ensure the socket is ready
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    const code = await sock.requestPairingCode(phoneNumber);
-    logger.info({ code }, 'Pairing code — enter this in WhatsApp on your phone');
-    console.log(`\n  *** PAIRING CODE: ${code} ***\n`);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    try {
+      const code = await sock.requestPairingCode(phoneNumber);
+      logger.info({ code }, 'Pairing code — enter this in WhatsApp on your phone');
+      console.log(`\n  *** PAIRING CODE: ${code} ***\n`);
+      console.log(`  You can also scan the QR code above if pairing code does not work.\n`);
+    } catch (err) {
+      logger.error({ err }, 'Failed to request pairing code — use QR code instead');
+    }
   }
 
   // Persist credentials on every update
@@ -62,7 +67,10 @@ export async function connectToWhatsApp() {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
+    if (qr && !sock.authState.creds.registered) {
+      // QR is available as fallback — don't auto-reconnect, let user scan it
+      logger.info('QR code displayed in terminal. Scan it or wait for new pairing code.');
+    } else if (qr) {
       logger.warn('QR code received (pairing code was not used in time). Reconnecting...');
     }
 
