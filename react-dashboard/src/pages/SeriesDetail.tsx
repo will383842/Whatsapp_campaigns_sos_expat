@@ -1,8 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries } from '../hooks/useSeries'
+import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
-import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle } from 'lucide-react'
+import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
 import SendReport from '../components/SendReport'
 import { useGroups } from '../hooks/useSeries'
@@ -151,6 +151,7 @@ export default function SeriesDetail() {
   const pause = usePauseSeries()
   const resume = useResumeSeries()
   const cancel = useCancelSeries()
+  const translate = useTranslateSeries(id!)
 
   const { data: logs = [] } = useQuery<SendLog[]>({
     queryKey: ['send-logs', id],
@@ -278,6 +279,16 @@ export default function SeriesDetail() {
                 <Copy size={14} />
                 Dupliquer
               </button>
+              {series.translation_mode === 'auto' && series.status === 'draft' && (
+                <button
+                  onClick={() => translate.mutate()}
+                  disabled={translate.isPending}
+                  className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors disabled:opacity-50"
+                >
+                  {translate.isPending ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
+                  Traduire (GPT-4o)
+                </button>
+              )}
             </div>
           )}
         </div>

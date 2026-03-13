@@ -7,16 +7,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SeriesTarget extends Model
 {
-    public $timestamps = false;
+    const CREATED_AT = 'created_at';
+    const UPDATED_AT = null;
 
-    protected $fillable = [
-        'series_id',
-        'group_id',
-    ];
-
-    protected $casts = [
-        'created_at' => 'datetime',
-    ];
+    protected $fillable = ['series_id', 'group_id'];
 
     public function series(): BelongsTo
     {

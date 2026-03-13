@@ -7,17 +7,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class MessageTarget extends Model
 {
-    public $timestamps = false;
+    const CREATED_AT = 'created_at';
+    const UPDATED_AT = null;
 
-    protected $fillable = [
-        'message_id',
-        'group_id',
-        'custom_content',
-    ];
-
-    protected $casts = [
-        'created_at' => 'datetime',
-    ];
+    protected $fillable = ['message_id', 'group_id', 'custom_content'];
 
     public function message(): BelongsTo
     {

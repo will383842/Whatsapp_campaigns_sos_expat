@@ -1,6 +1,6 @@
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
-import { useCreateSeries, useGroups, useSeriesDetail, useTranslateSeries } from '../hooks/useSeries'
+import { useCreateSeries, useGroups, useSeriesDetail } from '../hooks/useSeries'
 import SeriesForm from '../components/SeriesForm'
 import type { CampaignSeries } from '../types/series'
 
@@ -14,7 +14,6 @@ export default function SeriesCreate() {
 
   // If duplicating, load original series
   const { data: original } = useSeriesDetail(duplicateId ?? '')
-  const translate = useTranslateSeries('new')
 
   const handleSubmit = async (
     data: Partial<CampaignSeries> & { messages: { id: string; content: string; translations: Record<string, string> }[] }
@@ -59,8 +58,8 @@ export default function SeriesCreate() {
         onSubmit={handleSubmit}
         initialData={duplicateId && original ? { ...original, id: undefined as unknown as number, name: `Copie de ${original.name}` } : undefined}
         groups={groups}
-        isTranslating={translate.isPending}
-        onTranslate={() => translate.mutate()}
+        isTranslating={false}
+        onTranslate={undefined}
       />
     </div>
   )

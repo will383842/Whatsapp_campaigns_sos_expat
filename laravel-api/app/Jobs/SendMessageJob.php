@@ -69,7 +69,7 @@ class SendMessageJob implements ShouldQueue
 
             $healthData = json_decode($healthResponse->getBody()->getContents(), true);
 
-            if (($healthData['status'] ?? '') !== 'connected') {
+            if (($healthData['connected'] ?? false) !== true) {
                 $this->failMessage($message, 'Baileys service is not connected.');
                 $this->fail(new \RuntimeException('Baileys service is not connected.'));
                 return;
@@ -138,7 +138,7 @@ class SendMessageJob implements ShouldQueue
             'hybrid' => Group::where(function ($q) use ($series) {
                 $q->whereIn('language', $series->target_languages ?? [])
                   ->orWhereIn('id', $series->seriesTargets->pluck('group_id'));
-            })->where('is_active', true)->get(),
+            })->where('is_active', true)->distinct()->get(),
 
             default => collect(),
         };
@@ -153,8 +153,13 @@ class SendMessageJob implements ShouldQueue
             } else {
                 $translation = $message->getTranslationForLanguage($group->language);
 
+                // Fallback to source language if no translation for group's language
+                if (! $translation && $series->source_language && $series->source_language !== $group->language) {
+                    $translation = $message->getTranslationForLanguage($series->source_language);
+                }
+
                 if (! $translation) {
-                    Log::warning("SendMessageJob: no translation for language '{$group->language}' for message #{$message->id}, group #{$group->id}. Skipping group.");
+                    Log::warning("SendMessageJob: no translation found for language '{$group->language}' (and no source fallback) for message #{$message->id}, group #{$group->id}. Skipping group.");
                     continue;
                 }
 

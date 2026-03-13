@@ -60,6 +60,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/series/{id}/resume', [SeriesController::class, 'resume']);
     Route::post('/series/{id}/cancel', [SeriesController::class, 'cancel']);
     Route::post('/series/{id}/test-send', [SeriesController::class, 'testSend']);
+    Route::get('/series/{id}/logs', [SeriesController::class, 'logs']);
 
     // --- Messages (nested under series) ---
     Route::get('/series/{seriesId}/messages', [MessageController::class, 'index']);

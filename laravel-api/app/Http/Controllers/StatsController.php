@@ -40,7 +40,8 @@ class StatsController extends Controller
             ->groupBy('language')
             ->orderByDesc('count')
             ->get()
-            ->mapWithKeys(fn ($row) => [$row->language => $row->count]);
+            ->map(fn ($row) => ['language' => $row->language, 'count' => (int) $row->count])
+            ->values();
 
         // Next scheduled send
         $nextMessage = CampaignMessage::where('status', 'pending')
@@ -49,17 +50,20 @@ class StatsController extends Controller
 
         $nextSend = $nextMessage?->scheduled_at?->toIso8601String();
 
-        // Last 30 days calendar: messages sent per day
-        $last30Days = SendLog::where('status', 'sent')
+        // Build a complete 30-day array (no gaps)
+        $logsByDate = SendLog::where('status', 'sent')
             ->where('sent_at', '>=', now()->subDays(29)->startOfDay())
-            ->select(
-                DB::raw('DATE(sent_at) as date'),
-                DB::raw('count(*) as count')
-            )
+            ->select(DB::raw('DATE(sent_at) as date'), DB::raw('count(*) as count'))
             ->groupBy('date')
             ->orderBy('date')
             ->get()
-            ->mapWithKeys(fn ($row) => [$row->date => $row->count]);
+            ->mapWithKeys(fn ($row) => [$row->date => (int) $row->count]);
+
+        $last30Days = collect();
+        for ($i = 29; $i >= 0; $i--) {
+            $date = now()->subDays($i)->format('Y-m-d');
+            $last30Days->push(['date' => $date, 'count' => $logsByDate->get($date, 0)]);
+        }
 
         return response()->json([
             'active_series'            => $activeSeries,

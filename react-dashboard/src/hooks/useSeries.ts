@@ -9,7 +9,7 @@ export function useSeriesList() {
     queryKey: ['series'],
     queryFn: async () => {
       const res = await api.get('/api/series')
-      return res.data
+      return Array.isArray(res.data) ? res.data : (res.data?.data ?? [])
     },
   })
 }

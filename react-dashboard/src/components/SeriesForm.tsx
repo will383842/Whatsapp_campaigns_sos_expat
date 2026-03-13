@@ -568,15 +568,21 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
                 <strong>{form.messages.length}</strong> message(s) dans{' '}
                 <strong>{form.target_languages.length}</strong> langue(s).
               </p>
-              <button
-                type="button"
-                onClick={onTranslate}
-                disabled={isTranslating || form.messages.length === 0}
-                className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-              >
-                <Zap size={15} />
-                {isTranslating ? 'Traduction en cours...' : 'Traduire toute la série'}
-              </button>
+              {onTranslate ? (
+                <button
+                  type="button"
+                  onClick={onTranslate}
+                  disabled={isTranslating || form.messages.length === 0}
+                  className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Zap size={15} />
+                  {isTranslating ? 'Traduction en cours...' : 'Traduire toute la série'}
+                </button>
+              ) : (
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-700">
+                  💡 La traduction automatique par GPT-4o sera disponible depuis la page détail après la création de la série.
+                </div>
+              )}
             </div>
           )}
 

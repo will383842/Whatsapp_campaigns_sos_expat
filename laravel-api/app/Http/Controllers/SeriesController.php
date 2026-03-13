@@ -30,7 +30,7 @@ class SeriesController extends Controller
             'messages' => fn ($q) => $q->withCount('sendLogs'),
         ])
             ->latest()
-            ->paginate(20);
+            ->get();
 
         return response()->json($series);
     }
@@ -46,9 +46,11 @@ class SeriesController extends Controller
             'targeting_mode'   => ['required', Rule::in(['by_language', 'by_group', 'hybrid'])],
             'target_languages' => ['nullable', 'array'],
             'target_languages.*' => ['string', 'max:10'],
+            'target_groups'    => ['nullable', 'array'],
+            'target_groups.*'  => ['integer', 'exists:groups,id'],
             'send_days'        => ['nullable', 'array'],
             'send_days.*'      => ['string', Rule::in(['monday','tuesday','wednesday','thursday','friday','saturday','sunday'])],
-            'send_time'        => ['nullable', 'date_format:H:i:s'],
+            'send_time'        => ['nullable', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
             'timezone'         => ['nullable', 'timezone'],
             'starts_at'        => ['required', 'date'],
             'ends_at'          => ['nullable', 'date', 'after_or_equal:starts_at'],
@@ -65,6 +67,17 @@ class SeriesController extends Controller
         $validated['created_by'] = $request->user()->id;
 
         $series = CampaignSeries::create($validated);
+
+        // Save group targets for by_group and hybrid modes
+        if (in_array($validated['targeting_mode'], ['by_group', 'hybrid'], true) && !empty($request->input('target_groups'))) {
+            $groupIds = array_unique((array) $request->input('target_groups'));
+            foreach ($groupIds as $groupId) {
+                \App\Models\SeriesTarget::create([
+                    'series_id' => $series->id,
+                    'group_id'  => (int) $groupId,
+                ]);
+            }
+        }
 
         return response()->json($series->load('createdBy:id,name'), 201);
     }
@@ -105,7 +118,7 @@ class SeriesController extends Controller
             'target_languages.*' => ['string', 'max:10'],
             'send_days'        => ['nullable', 'array'],
             'send_days.*'      => ['string', Rule::in(['monday','tuesday','wednesday','thursday','friday','saturday','sunday'])],
-            'send_time'        => ['nullable', 'date_format:H:i:s'],
+            'send_time'        => ['nullable', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
             'timezone'         => ['nullable', 'timezone'],
             'starts_at'        => ['sometimes', 'date'],
             'ends_at'          => ['nullable', 'date', 'after_or_equal:starts_at'],
@@ -171,7 +184,7 @@ class SeriesController extends Controller
             foreach ($slots as $index => $slot) {
                 CampaignMessage::create([
                     'series_id'   => $series->id,
-                    'order_index' => $index,
+                    'order_index' => $index + 1,
                     'scheduled_at' => $slot,
                     'status'      => 'pending',
                 ]);
@@ -259,6 +272,24 @@ class SeriesController extends Controller
         });
 
         return response()->json(['message' => 'Series cancelled.', 'series' => $series->fresh()]);
+    }
+
+    /**
+     * Get all send logs for a series (all messages).
+     */
+    public function logs(int $id): JsonResponse
+    {
+        $series = CampaignSeries::findOrFail($id);
+
+        $logs = \App\Models\SendLog::whereIn(
+            'message_id',
+            $series->messages()->pluck('id')
+        )
+        ->with('group:id,name,language,whatsapp_group_id')
+        ->orderByDesc('sent_at')
+        ->get();
+
+        return response()->json($logs);
     }
 
     /**
