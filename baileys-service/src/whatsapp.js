@@ -18,6 +18,9 @@ let sock = null;
 /** @type {boolean} */
 let isReconnecting = false;
 
+/** @type {ReturnType<typeof setInterval> | null} */
+let heartbeatInterval = null;
+
 /**
  * Connect (or reconnect) to WhatsApp using pairing code.
  * The phone number is read from the WA_PHONE_NUMBER environment variable.
@@ -106,6 +109,17 @@ export async function connectToWhatsApp() {
         { user: sock?.user?.id },
         'WhatsApp connection established',
       );
+
+      // Heartbeat — check connection every 60s (clear previous to avoid stacking)
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+      }
+      heartbeatInterval = setInterval(() => {
+        if (!isConnected()) {
+          logger.warn('Heartbeat: WhatsApp disconnected, attempting reconnect...');
+          connectToWhatsApp();
+        }
+      }, 60000);
     }
 
     if (connection === 'connecting') {

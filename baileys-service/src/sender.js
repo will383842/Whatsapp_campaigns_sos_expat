@@ -135,6 +135,34 @@ async function reportCampaignComplete({ message_id, total, sent_count, failed_co
 }
 
 /**
+ * Send a message with retry logic for transient network errors.
+ * @param {import('@whiskeysockets/baileys').WASocket} sock
+ * @param {string} jid
+ * @param {string} content
+ * @param {number} [maxRetries=2]
+ * @returns {Promise<boolean>}
+ */
+async function sendWithRetry(sock, jid, content, maxRetries = 2) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await sock.sendMessage(jid, { text: content });
+      return true;
+    } catch (err) {
+      const isRetryable = err?.message?.includes('timed out') ||
+                         err?.message?.includes('connection') ||
+                         err?.message?.includes('ECONNRESET');
+      if (isRetryable && attempt < maxRetries) {
+        const delay = 5000 * (attempt + 1);
+        logger.warn({ jid, attempt, delay }, 'Retryable error, waiting...');
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/**
  * Send a campaign message to a list of WhatsApp groups.
  *
  * The targets are shuffled before sending to randomize the order and avoid
@@ -218,7 +246,7 @@ export async function sendCampaignMessage(payload) {
 
     // --- Send message ---
     try {
-      await sock.sendMessage(jid, { text: content });
+      await sendWithRetry(sock, jid, content);
       sent_count++;
       logger.info({ message_id, group_wa_id, jid }, 'Message sent successfully');
       await reportGroupResult({ message_id, group_wa_id, status: 'sent' });
@@ -273,7 +301,7 @@ export async function testSend(group_wa_id, content) {
   const jid = toGroupJid(group_wa_id);
 
   try {
-    await sock.sendMessage(jid, { text: content });
+    await sendWithRetry(sock, jid, content);
     logger.info({ group_wa_id, jid }, 'Test message sent successfully');
     return { success: true, jid };
   } catch (err) {

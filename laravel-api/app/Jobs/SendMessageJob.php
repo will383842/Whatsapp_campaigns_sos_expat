@@ -24,9 +24,22 @@ class SendMessageJob implements ShouldQueue
     public int $tries = 3;
 
     /**
+     * Maximum number of unhandled exceptions to allow before failing.
+     */
+    public int $maxExceptions = 2;
+
+    /**
      * Timeout in seconds.
      */
-    public int $timeout = 120;
+    public int $timeout = 3600;
+
+    /**
+     * Backoff intervals (seconds) between retries.
+     */
+    public function backoff(): array
+    {
+        return [30, 60, 120];
+    }
 
     public function __construct(
         public readonly int $messageId

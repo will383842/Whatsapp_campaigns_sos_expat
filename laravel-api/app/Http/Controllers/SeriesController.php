@@ -23,14 +23,16 @@ class SeriesController extends Controller
     /**
      * List all series, paginated.
      */
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
+        $request->validate(['per_page' => 'nullable|integer|min:1|max:100']);
+
         $series = CampaignSeries::with([
             'createdBy:id,name',
             'messages' => fn ($q) => $q->withCount('sendLogs'),
         ])
             ->latest()
-            ->get();
+            ->paginate($request->input('per_page', 30));
 
         return response()->json($series);
     }
@@ -45,7 +47,7 @@ class SeriesController extends Controller
             'type'             => ['required', Rule::in(['drip', 'one_shot'])],
             'targeting_mode'   => ['required', Rule::in(['by_language', 'by_group', 'hybrid'])],
             'target_languages' => ['nullable', 'array'],
-            'target_languages.*' => ['string', 'max:10'],
+            'target_languages.*' => ['string', Rule::in(['fr', 'en', 'de', 'pt', 'es', 'it', 'nl', 'ar', 'zh'])],
             'target_groups'    => ['nullable', 'array'],
             'target_groups.*'  => ['integer', 'exists:groups,id'],
             'send_days'        => ['nullable', 'array'],
@@ -115,7 +117,7 @@ class SeriesController extends Controller
             'type'             => ['sometimes', Rule::in(['drip', 'one_shot'])],
             'targeting_mode'   => ['sometimes', Rule::in(['by_language', 'by_group', 'hybrid'])],
             'target_languages' => ['nullable', 'array'],
-            'target_languages.*' => ['string', 'max:10'],
+            'target_languages.*' => ['string', Rule::in(['fr', 'en', 'de', 'pt', 'es', 'it', 'nl', 'ar', 'zh'])],
             'send_days'        => ['nullable', 'array'],
             'send_days.*'      => ['string', Rule::in(['monday','tuesday','wednesday','thursday','friday','saturday','sunday'])],
             'send_time'        => ['nullable', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],

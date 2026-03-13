@@ -1,41 +1,31 @@
-# ============================================================
-# WhatsApp Campaigns SOS-Expat — .gitignore
-# ============================================================
+# Environment
+**/.env
+!**/.env.example
 
-# ── Baileys Service ─────────────────────────────────────────
-baileys-service/node_modules/
-baileys-service/auth_info/*
-!baileys-service/auth_info/.gitkeep
-baileys-service/logs/*
-!baileys-service/logs/.gitkeep
-baileys-service/.env
+# Dependencies
+**/node_modules/
+**/vendor/
 
-# ── Laravel API ─────────────────────────────────────────────
-laravel-api/.env
-laravel-api/vendor/
-laravel-api/node_modules/
-laravel-api/storage/logs/*.log
-laravel-api/storage/app/public/
-laravel-api/bootstrap/cache/*.php
-laravel-api/.phpunit.result.cache
+# Build
+**/dist/
+**/build/
 
-# ── React Dashboard ─────────────────────────────────────────
-react-dashboard/node_modules/
-react-dashboard/dist/
-react-dashboard/.env
-react-dashboard/.env.local
+# WhatsApp session
+**/auth_info/
 
-# ── OS / Editors ────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-.vscode/settings.json
-*.log
+# IDE
+.idea/
+.vscode/
 *.swp
 *.swo
 
-# ── Secrets ─────────────────────────────────────────────────
-*.pem
-*.key
-.env
-.env.*
-!.env.example
+# OS
+.DS_Store
+Thumbs.db
+
+# Laravel
+laravel-api/storage/*.key
+laravel-api/storage/logs/*
+!laravel-api/storage/logs/.gitkeep
+laravel-api/bootstrap/cache/*
+!laravel-api/bootstrap/cache/.gitkeep

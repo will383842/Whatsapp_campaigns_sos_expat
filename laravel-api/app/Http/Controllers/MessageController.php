@@ -120,17 +120,26 @@ class MessageController extends Controller
         ]);
 
         try {
-            $this->translationService->translateSeries($series, $validated['target_languages']);
+            $result = $this->translationService->translateSeries($series, $validated['target_languages']);
         } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Translation failed: ' . $e->getMessage(),
             ], 500);
         }
 
-        return response()->json([
-            'message'            => 'Translations completed.',
+        $response = [
+            'message'            => $result['failed']
+                ? 'Translations completed with some failures.'
+                : 'Translations completed.',
             'target_languages'   => $validated['target_languages'],
-        ]);
+            'succeeded'          => $result['succeeded'],
+        ];
+
+        if (! empty($result['failed'])) {
+            $response['failed'] = $result['failed'];
+        }
+
+        return response()->json($response);
     }
 
     /**

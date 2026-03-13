@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\CheckRole;
 use App\Http\Middleware\ValidateBaileysApiKey;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
@@ -20,6 +21,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->alias([
             'baileys.api.key' => ValidateBaileysApiKey::class,
+            'role' => CheckRole::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

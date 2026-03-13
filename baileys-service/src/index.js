@@ -56,9 +56,11 @@ function requireApiKey(req, res, next) {
  */
 app.get('/health', (_req, res) => {
   const sock = getSocket();
-  res.json({
-    status: 'ok',
-    connected: isConnected(),
+  const connected = isConnected();
+  const statusCode = connected ? 200 : 503;
+  res.status(statusCode).json({
+    status: connected ? 'ok' : 'disconnected',
+    connected,
     phone: sock?.user?.id || null,
   });
 });
@@ -147,9 +149,26 @@ async function start() {
     logger.error({ err: err.message }, 'Failed to connect to WhatsApp on startup — will retry on reconnect');
   }
 
-  app.listen(PORT, '127.0.0.1', () => {
+  const server = app.listen(PORT, '127.0.0.1', () => {
     logger.info({ port: PORT }, `HTTP server listening on 127.0.0.1:${PORT}`);
   });
+
+  // Graceful shutdown
+  function gracefulShutdown(signal) {
+    logger.info({ signal }, 'Received %s, shutting down...', signal);
+    const sock = getSocket();
+    if (sock) {
+      sock.end(undefined);
+    }
+    server.close(() => {
+      logger.info('HTTP server closed');
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 5000);
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 start().catch((err) => {

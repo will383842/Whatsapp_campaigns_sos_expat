@@ -58,11 +58,15 @@ PROMPT;
      *
      * @param  CampaignSeries  $series
      * @param  string[]        $targetLanguages  Array of BCP-47 language codes
+     * @return array{succeeded: int, failed: array<int, array{message_id: int, language: string, error: string}>}
      */
-    public function translateSeries(CampaignSeries $series, array $targetLanguages): void
+    public function translateSeries(CampaignSeries $series, array $targetLanguages): array
     {
         $sourceLang = $series->source_language ?? 'fr';
         $messages = $series->messages()->with('translations')->get();
+
+        $succeeded = 0;
+        $errors = [];
 
         foreach ($messages as $message) {
             // Find the source translation
@@ -70,6 +74,11 @@ PROMPT;
 
             if (! $sourceTranslation) {
                 Log::warning("TranslationService: no source translation ({$sourceLang}) for message #{$message->id}, skipping.");
+                $errors[] = [
+                    'message_id' => $message->id,
+                    'language'   => $sourceLang,
+                    'error'      => "No source translation found for language '{$sourceLang}'",
+                ];
                 continue;
             }
 
@@ -95,10 +104,22 @@ PROMPT;
                             'translated_by'  => 'gpt4o',
                         ]
                     );
+
+                    $succeeded++;
                 } catch (\Throwable $e) {
                     Log::error("TranslationService: failed to translate message #{$message->id} to {$targetLang}: {$e->getMessage()}");
+                    $errors[] = [
+                        'message_id' => $message->id,
+                        'language'   => $targetLang,
+                        'error'      => $e->getMessage(),
+                    ];
                 }
             }
         }
+
+        return [
+            'succeeded' => $succeeded,
+            'failed'    => $errors,
+        ];
     }
 }
