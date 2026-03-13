@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
-import { connectToWhatsApp, getSocket, isConnected } from './whatsapp.js';
+import { connectToWhatsApp, getSocket, isConnected, getLastQr } from './whatsapp.js';
+import QRCode from 'qrcode';
 import { sendCampaignMessage, testSend } from './sender.js';
 import logger from './logger.js';
 
@@ -49,6 +50,54 @@ function requireApiKey(req, res, next) {
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
+
+/**
+ * GET /qr
+ * Public endpoint. Returns QR code as HTML page for easy scanning.
+ */
+app.get('/qr', async (_req, res) => {
+  if (isConnected()) {
+    return res.send(`
+      <html><body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;background:#1a1a2e;">
+        <div style="text-align:center;color:#4ade80;">
+          <h1 style="font-size:3em;">&#10004;</h1>
+          <h2>WhatsApp connecté !</h2>
+          <p>L'appareil est déjà lié.</p>
+        </div>
+      </body></html>
+    `);
+  }
+
+  const qr = getLastQr();
+  if (!qr) {
+    return res.send(`
+      <html><head><meta http-equiv="refresh" content="3"></head>
+      <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;background:#1a1a2e;">
+        <div style="text-align:center;color:white;">
+          <h2>En attente du QR code...</h2>
+          <p>La page se rafraîchit automatiquement.</p>
+        </div>
+      </body></html>
+    `);
+  }
+
+  try {
+    const qrImageUrl = await QRCode.toDataURL(qr, { width: 400, margin: 2 });
+    return res.send(`
+      <html><head><meta http-equiv="refresh" content="20"></head>
+      <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;background:#1a1a2e;">
+        <div style="text-align:center;">
+          <h2 style="color:white;">Scanner ce QR code avec WhatsApp</h2>
+          <p style="color:#aaa;">Appareils connectés → Connecter un appareil → Scanner</p>
+          <img src="${qrImageUrl}" style="border-radius:12px;margin:20px 0;" />
+          <p style="color:#aaa;font-size:12px;">Le QR se renouvelle automatiquement. Page rafraîchie toutes les 20s.</p>
+        </div>
+      </body></html>
+    `);
+  } catch (err) {
+    return res.status(500).send('Erreur génération QR: ' + err.message);
+  }
+});
 
 /**
  * GET /health
@@ -149,8 +198,8 @@ async function start() {
     logger.error({ err: err.message }, 'Failed to connect to WhatsApp on startup — will retry on reconnect');
   }
 
-  const server = app.listen(PORT, '127.0.0.1', () => {
-    logger.info({ port: PORT }, `HTTP server listening on 127.0.0.1:${PORT}`);
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    logger.info({ port: PORT }, `HTTP server listening on 0.0.0.0:${PORT}`);
   });
 
   // Graceful shutdown

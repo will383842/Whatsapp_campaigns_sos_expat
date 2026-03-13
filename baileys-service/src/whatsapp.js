@@ -22,6 +22,13 @@ let isReconnecting = false;
 /** @type {ReturnType<typeof setInterval> | null} */
 let heartbeatInterval = null;
 
+/** @type {string | null} */
+let lastQrCode = null;
+
+export function getLastQr() {
+  return lastQrCode;
+}
+
 /**
  * Connect (or reconnect) to WhatsApp using pairing code.
  * The phone number is read from the WA_PHONE_NUMBER environment variable.
@@ -46,19 +53,10 @@ export async function connectToWhatsApp() {
     markOnlineOnConnect: false,
   });
 
-  // Request pairing code if not yet registered
+  // If not yet registered, QR code will be provided via connection.update event
   if (!sock.authState.creds.registered) {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    try {
-      // Ensure phone number has no spaces/dashes/plus
-      const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
-      logger.info({ cleanPhone }, 'Requesting pairing code...');
-      const code = await sock.requestPairingCode(cleanPhone);
-      logger.info({ code }, 'Pairing code — enter this in WhatsApp on your phone');
-      console.log(`\n  *** PAIRING CODE: ${code} ***\n`);
-    } catch (err) {
-      logger.error({ err: err.message }, 'Failed to request pairing code');
-    }
+    logger.info('Not yet registered — QR code will be available at /qr endpoint');
+    console.log('\n  *** Open https://whatsapp.life-expat.com/baileys/qr to scan the QR code ***\n');
   }
 
   // Persist credentials on every update
@@ -68,11 +66,9 @@ export async function connectToWhatsApp() {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr && !sock.authState.creds.registered) {
-      // QR is available as fallback — don't auto-reconnect, let user scan it
-      logger.info('QR code displayed in terminal. Scan it or wait for new pairing code.');
-    } else if (qr) {
-      logger.warn('QR code received (pairing code was not used in time). Reconnecting...');
+    if (qr) {
+      lastQrCode = qr;
+      logger.info('New QR code available at /qr endpoint');
     }
 
     if (connection === 'close') {
