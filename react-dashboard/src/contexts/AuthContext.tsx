@@ -18,8 +18,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     api
-      .get<User>('/api/auth/me')
-      .then((res) => setUser(res.data))
+      .get('/api/auth/me')
+      .then((res) => setUser(res.data?.user ?? res.data))
       .catch(() => setUser(null))
       .finally(() => setLoading(false))
   }, [])
@@ -27,8 +27,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     await initCsrf()
     await api.post('/api/auth/login', { email, password })
-    const res = await api.get<User>('/api/auth/me')
-    setUser(res.data)
+    const res = await api.get('/api/auth/me')
+    setUser(res.data?.user ?? res.data)
   }, [])
 
   const logout = useCallback(async () => {

@@ -59,14 +59,16 @@ class SendMessageJob implements ShouldQueue
             return;
         }
 
-        // Guard against double dispatch
-        if ($message->status !== 'pending') {
+        // Guard: only process pending or sending (dispatcher sets sending atomically)
+        if (! in_array($message->status, ['pending', 'sending'], true)) {
             Log::info("SendMessageJob: message #{$this->messageId} is already {$message->status}, skipping.");
             return;
         }
 
-        // Mark as sending
-        $message->update(['status' => 'sending']);
+        // Ensure status is sending
+        if ($message->status === 'pending') {
+            $message->update(['status' => 'sending']);
+        }
 
         $series = $message->series;
         $baileysUrl = config('baileys.service_url');

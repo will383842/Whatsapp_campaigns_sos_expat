@@ -33,8 +33,8 @@ class SendController extends Controller
         $validated = $request->validate([
             'message_id'    => ['required', 'integer', 'exists:campaign_messages,id'],
             'group_wa_id'   => ['required', 'string'],
-            'language'      => ['required', 'string', 'max:10'],
-            'content_sent'  => ['required', 'string'],
+            'language'      => ['nullable', 'string', 'max:10'],
+            'content_sent'  => ['nullable', 'string'],
             'status'        => ['required', Rule::in(['sent', 'failed'])],
             'sent_at'       => ['nullable', 'date'],
             'error_message' => ['nullable', 'string'],
@@ -50,8 +50,8 @@ class SendController extends Controller
         SendLog::create([
             'message_id'    => $validated['message_id'],
             'group_id'      => $group->id,
-            'language'      => $validated['language'],
-            'content_sent'  => $validated['content_sent'],
+            'language'      => $validated['language'] ?? '',
+            'content_sent'  => $validated['content_sent'] ?? '',
             'status'        => $validated['status'],
             'sent_at'       => $validated['sent_at'] ?? now(),
             'error_message' => $validated['error_message'] ?? null,
@@ -76,24 +76,32 @@ class SendController extends Controller
     {
         $validated = $request->validate([
             'message_id'   => ['required', 'integer', 'exists:campaign_messages,id'],
-            'total_sent'   => ['required', 'integer', 'min:0'],
-            'total_failed' => ['required', 'integer', 'min:0'],
+            // Accept both naming conventions (total_sent/sent_count)
+            'total_sent'   => ['nullable', 'integer', 'min:0'],
+            'total_failed' => ['nullable', 'integer', 'min:0'],
+            'sent_count'   => ['nullable', 'integer', 'min:0'],
+            'failed_count' => ['nullable', 'integer', 'min:0'],
+            'total'        => ['nullable', 'integer', 'min:0'],
             'completed_at' => ['nullable', 'date'],
         ]);
 
+        // Normalize field names: accept both conventions
+        $totalSent   = $validated['total_sent'] ?? $validated['sent_count'] ?? 0;
+        $totalFailed = $validated['total_failed'] ?? $validated['failed_count'] ?? 0;
+
         $message = CampaignMessage::with('series')->findOrFail($validated['message_id']);
 
-        DB::transaction(function () use ($message, $validated) {
-            $finalStatus = $validated['total_sent'] > 0 ? 'sent' : 'failed';
+        DB::transaction(function () use ($message, $totalSent, $totalFailed) {
+            $finalStatus = $totalSent > 0 ? 'sent' : 'failed';
 
             $message->update([
                 'status'  => $finalStatus,
-                'sent_at' => $validated['completed_at'] ?? now(),
+                'sent_at' => now(),
             ]);
 
             $series = $message->series;
 
-            if ($validated['total_sent'] > 0) {
+            if ($totalSent > 0) {
                 $series->increment('sent_messages');
             }
 

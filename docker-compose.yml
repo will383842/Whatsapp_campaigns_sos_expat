@@ -110,6 +110,8 @@ services:
       LARAVEL_API_KEY: ${BAILEYS_API_KEY:-change_me}
       WA_PHONE_NUMBER: ${WA_PHONE_NUMBER:-33743331201}
       LOG_LEVEL: warn
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-7560535072}
     depends_on:
       - app
     volumes:

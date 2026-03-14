@@ -115,6 +115,144 @@ app.get('/health', (_req, res) => {
 });
 
 /**
+ * GET /groups
+ * Protected endpoint. Returns all WhatsApp groups the connected account participates in.
+ */
+app.get('/groups', requireApiKey, async (_req, res) => {
+  if (!isConnected()) {
+    return res.status(503).json({ error: 'WhatsApp is not connected' });
+  }
+
+  const sock = getSocket();
+
+  try {
+    const result = await sock.groupFetchAllParticipating();
+    const groups = Object.values(result).map((g) => ({
+      id: g.id.replace('@g.us', ''),
+      name: g.subject || '',
+      member_count: g.participants?.length || 0,
+      creation: g.creation || null,
+      desc: g.desc || '',
+      is_community: g.isCommunity || false,
+      is_community_announce: g.isCommunityAnnounce || false,
+      linked_parent: g.linkedParent || null,
+    }));
+
+    logger.info({ count: groups.length }, 'Fetched WhatsApp groups');
+    return res.json({ success: true, count: groups.length, groups });
+  } catch (err) {
+    logger.error({ err: err.message }, 'Failed to fetch groups');
+    return res.status(500).json({ error: 'Failed to fetch groups: ' + err.message });
+  }
+});
+
+/**
+ * GET /groups/:groupId/participants
+ * Protected endpoint. Returns the participants of a specific group.
+ */
+app.get('/groups/:groupId/participants', requireApiKey, async (req, res) => {
+  if (!isConnected()) {
+    return res.status(503).json({ error: 'WhatsApp is not connected' });
+  }
+
+  const sock = getSocket();
+  const groupJid = req.params.groupId + '@g.us';
+
+  try {
+    const metadata = await sock.groupMetadata(groupJid);
+    const participants = metadata.participants.map((p) => ({
+      phone: p.id.replace('@s.whatsapp.net', ''),
+      admin: p.admin || null, // 'admin', 'superadmin', or null
+    }));
+
+    return res.json({
+      success: true,
+      group_name: metadata.subject,
+      count: participants.length,
+      participants,
+    });
+  } catch (err) {
+    logger.error({ err: err.message, groupId: req.params.groupId }, 'Failed to fetch participants');
+    return res.status(500).json({ error: 'Failed to fetch participants: ' + err.message });
+  }
+});
+
+/**
+ * POST /restart
+ * Protected endpoint. Forces a reconnection to WhatsApp.
+ */
+app.post('/restart', requireApiKey, async (req, res) => {
+  const forceNewSession = req.body?.force === true || !isConnected();
+  logger.info({ forceNewSession }, 'Manual restart requested — disconnecting and reconnecting...');
+
+  try {
+    const currentSock = getSocket();
+    if (currentSock) {
+      currentSock.end(undefined);
+    }
+
+    // Small delay to let the socket fully close
+    await new Promise((r) => setTimeout(r, 2000));
+
+    // If force=true or disconnected, remove old auth to force fresh QR pairing
+    if (forceNewSession) {
+      const fs = await import('fs');
+      const path = await import('path');
+      const { fileURLToPath } = await import('url');
+      const __dirname = path.default.dirname(fileURLToPath(import.meta.url));
+      const authDir = path.default.join(__dirname, '..', 'auth_info');
+      if (fs.default.existsSync(authDir)) {
+        // Delete contents only (not the dir itself — it may be a Docker volume mount)
+        const files = fs.default.readdirSync(authDir);
+        for (const file of files) {
+          fs.default.rmSync(path.default.join(authDir, file), { force: true });
+        }
+        logger.info({ filesRemoved: files.length }, 'Cleared auth_info/ for fresh QR pairing');
+      }
+    }
+
+    await connectToWhatsApp();
+
+    return res.json({
+      success: true,
+      message: forceNewSession
+        ? 'Session réinitialisée — scannez le QR code pour vous reconnecter.'
+        : 'Reconnexion lancée.',
+      connected: isConnected(),
+    });
+  } catch (err) {
+    logger.error({ err: err.message }, 'Restart failed');
+    return res.json({
+      success: true,
+      message: 'Reconnexion lancée (peut prendre quelques instants)',
+      connected: false,
+    });
+  }
+});
+
+/**
+ * GET /qr/data
+ * Protected endpoint. Returns QR code as base64 data URL (for embedding in dashboard).
+ */
+app.get('/qr/data', requireApiKey, async (_req, res) => {
+  if (isConnected()) {
+    return res.json({ connected: true, qr: null });
+  }
+
+  const qr = getLastQr();
+  if (!qr) {
+    return res.json({ connected: false, qr: null });
+  }
+
+  try {
+    const qrDataUrl = await QRCode.toDataURL(qr, { width: 400, margin: 2 });
+    return res.json({ connected: false, qr: qrDataUrl });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to generate QR: ' + err.message });
+  }
+});
+
+/**
  * POST /send
  * Protected endpoint. Enqueues a campaign send job and responds immediately.
  *

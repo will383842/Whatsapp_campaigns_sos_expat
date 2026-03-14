@@ -1,15 +1,20 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { BarChart2, List, LogOut, MessageSquare } from 'lucide-react'
+import { BarChart2, List, LogOut, MessageSquare, Users, Wifi, WifiOff } from 'lucide-react'
 import { useAuthContext } from '../contexts/AuthContext'
+import { useWhatsAppStatus } from '../hooks/useSeries'
 
 const navItems = [
-  { to: '/series', label: 'Séries', icon: List },
+  { to: '/series', label: 'S\u00e9ries', icon: List },
+  { to: '/groups', label: 'Groupes', icon: Users },
   { to: '/stats', label: 'Statistiques', icon: BarChart2 },
 ]
 
 export default function Layout() {
   const { user, isAdmin, logout } = useAuthContext()
   const navigate = useNavigate()
+  const { data: waStatus } = useWhatsAppStatus()
+
+  const waConnected = waStatus?.connected === true
 
   const handleLogout = async () => {
     await logout()
@@ -49,6 +54,22 @@ export default function Layout() {
               {label}
             </NavLink>
           ))}
+
+          {/* WhatsApp status link */}
+          <NavLink
+            to="/whatsapp"
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                isActive
+                  ? 'bg-green-600 text-white'
+                  : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+              }`
+            }
+          >
+            {waConnected ? <Wifi size={18} /> : <WifiOff size={18} />}
+            <span className="flex-1">WhatsApp</span>
+            <span className={'w-2.5 h-2.5 rounded-full shrink-0 ' + (waConnected ? 'bg-green-400' : 'bg-red-400')} />
+          </NavLink>
         </nav>
 
         {/* User */}
@@ -66,7 +87,7 @@ export default function Layout() {
             </div>
             <button
               onClick={handleLogout}
-              title="Se déconnecter"
+              title="Se d\u00e9connecter"
               className="ml-2 p-2 rounded-lg text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
             >
               <LogOut size={16} />

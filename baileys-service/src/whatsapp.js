@@ -8,10 +8,47 @@ import {
 import { Boom } from '@hapi/boom';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 import logger from './logger.js';
+import { registerWelcomeListener } from './welcome.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AUTH_DIR = path.join(__dirname, '..', 'auth_info');
+
+// Telegram alert for WhatsApp disconnection
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_ALERT_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_ALERT_CHAT_ID || '7560535072';
+
+async function sendTelegramAlert(message) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: 'HTML',
+      }),
+    });
+  } catch (err) {
+    logger.error({ err: err.message }, 'Failed to send Telegram alert');
+  }
+}
+
+function clearAuthInfo() {
+  try {
+    if (fs.existsSync(AUTH_DIR)) {
+      const files = fs.readdirSync(AUTH_DIR);
+      for (const file of files) {
+        fs.rmSync(path.join(AUTH_DIR, file), { force: true });
+      }
+      logger.info({ filesRemoved: files.length }, 'Cleared auth_info/ for fresh QR pairing');
+    }
+  } catch (err) {
+    logger.error({ err: err.message }, 'Failed to clear auth_info/');
+  }
+}
 
 /** @type {import('@whiskeysockets/baileys').WASocket | null} */
 let sock = null;
@@ -22,8 +59,39 @@ let isReconnecting = false;
 /** @type {ReturnType<typeof setInterval> | null} */
 let heartbeatInterval = null;
 
+/** @type {ReturnType<typeof setInterval> | null} */
+let disconnectReminderInterval = null;
+
 /** @type {string | null} */
 let lastQrCode = null;
+
+// Reminder every 6 hours while disconnected
+const REMINDER_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+function startDisconnectReminder() {
+  stopDisconnectReminder();
+  disconnectReminderInterval = setInterval(() => {
+    if (!isConnected()) {
+      sendTelegramAlert(
+        '⚠️ <b>Rappel : WhatsApp Campaigns toujours déconnecté !</b>\n\n' +
+        '🚫 Les campagnes WhatsApp ne sont PAS envoyées.\n' +
+        'Les messages planifiés s\'accumulent sans être livrés.\n\n' +
+        '👉 <a href="https://whatsapp.life-expat.com/whatsapp">Scanner le QR code maintenant</a>'
+      );
+      logger.warn('Sent 6h disconnect reminder via Telegram');
+    } else {
+      stopDisconnectReminder();
+    }
+  }, REMINDER_INTERVAL_MS);
+  logger.info('Disconnect reminder started (every 6h)');
+}
+
+function stopDisconnectReminder() {
+  if (disconnectReminderInterval) {
+    clearInterval(disconnectReminderInterval);
+    disconnectReminderInterval = null;
+  }
+}
 
 export function getLastQr() {
   return lastQrCode;
@@ -85,11 +153,31 @@ export async function connectToWhatsApp() {
       );
 
       if (loggedOut) {
-        logger.error(
-          'Logged out from WhatsApp. Remove auth_info/ and restart to re-pair.',
+        logger.error('Logged out from WhatsApp — clearing session and generating new QR...');
+
+        // Alert admin via Telegram
+        sendTelegramAlert(
+          '🔴 <b>WhatsApp Campaigns déconnecté !</b>\n\n' +
+          'La session WhatsApp a été révoquée.\n' +
+          'Un nouveau QR code est prêt à scanner.\n\n' +
+          '👉 <a href="https://whatsapp.life-expat.com/whatsapp">Scanner le QR code</a>'
         );
-        // Do NOT reconnect — operator must re-pair manually
+
+        // Start 6h reminder loop
+        startDisconnectReminder();
+
+        // Auto-clear old credentials and reconnect to generate fresh QR
         sock = null;
+        clearAuthInfo();
+
+        setTimeout(async () => {
+          try {
+            await connectToWhatsApp();
+            logger.info('Fresh session started — QR code available at /qr');
+          } catch (err) {
+            logger.error({ err: err.message }, 'Failed to start fresh session after logout');
+          }
+        }, 3000);
         return;
       }
 
@@ -114,6 +202,19 @@ export async function connectToWhatsApp() {
         { user: sock?.user?.id },
         'WhatsApp connection established',
       );
+
+      // Stop disconnect reminders
+      stopDisconnectReminder();
+
+      // Notify admin that connection is restored
+      sendTelegramAlert(
+        '🟢 <b>WhatsApp Campaigns reconnecté !</b>\n\n' +
+        'La connexion WhatsApp est rétablie.\n' +
+        'Les campagnes peuvent être envoyées normalement.'
+      );
+
+      // Register welcome message listener for new group members
+      registerWelcomeListener(sock);
 
       // Heartbeat — check connection every 60s (clear previous to avoid stacking)
       if (heartbeatInterval) {

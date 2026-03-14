@@ -92,12 +92,14 @@ async function isGroupValid(jid) {
  * @param {'sent'|'failed'} params.status
  * @param {string} [params.error_message]
  */
-async function reportGroupResult({ message_id, group_wa_id, status, error_message }) {
+async function reportGroupResult({ message_id, group_wa_id, language, content, status, error_message }) {
   try {
     await laravelClient.post('/api/send/report', {
       message_id,
       group_wa_id,
       status,
+      ...(language ? { language } : {}),
+      ...(content ? { content_sent: content } : {}),
       ...(error_message ? { error_message } : {}),
     });
     logger.debug({ message_id, group_wa_id, status }, 'Group result reported to Laravel');
@@ -189,6 +191,8 @@ export async function sendCampaignMessage(payload) {
       await reportGroupResult({
         message_id,
         group_wa_id: target.group_wa_id,
+        language: target.language,
+        content: target.content,
         status: 'failed',
         error_message: 'WhatsApp socket is not connected',
       });
@@ -232,6 +236,8 @@ export async function sendCampaignMessage(payload) {
       await reportGroupResult({
         message_id,
         group_wa_id,
+        language,
+        content,
         status: 'failed',
         error_message: 'Group not found or not accessible',
       });
@@ -249,12 +255,12 @@ export async function sendCampaignMessage(payload) {
       await sendWithRetry(sock, jid, content);
       sent_count++;
       logger.info({ message_id, group_wa_id, jid }, 'Message sent successfully');
-      await reportGroupResult({ message_id, group_wa_id, status: 'sent' });
+      await reportGroupResult({ message_id, group_wa_id, language, content, status: 'sent' });
     } catch (err) {
       failed_count++;
       const error_message = err?.message || String(err);
       logger.error({ message_id, group_wa_id, jid, err: error_message }, 'Failed to send message to group');
-      await reportGroupResult({ message_id, group_wa_id, status: 'failed', error_message });
+      await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message });
     }
 
     // --- Random delay before next group (skip after last) ---

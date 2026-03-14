@@ -1,8 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries } from '../hooks/useSeries'
+import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
-import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap } from 'lucide-react'
+import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
 import SendReport from '../components/SendReport'
 import { useGroups } from '../hooks/useSeries'
@@ -145,12 +145,15 @@ export default function SeriesDetail() {
   const navigate = useNavigate()
   const { isAdmin } = useAuthContext()
   const [activeTab, setActiveTab] = useState<Tab>('planning')
+  const [showGroups, setShowGroups] = useState(false)
 
   const { data: series, isLoading, error } = useSeriesDetail(id!)
   const { data: groups = [] } = useGroups()
   const pause = usePauseSeries()
   const resume = useResumeSeries()
   const cancel = useCancelSeries()
+  const activate = useActivateSeries()
+  const deactivate = useDeactivateSeries()
   const translate = useTranslateSeries(id!)
 
   const { data: logs = [] } = useQuery<SendLog[]>({
@@ -190,6 +193,25 @@ export default function SeriesDetail() {
     series.total_messages > 0
       ? Math.round((series.sent_messages / series.total_messages) * 100)
       : 0
+
+  // Compute targeted groups
+  const targetedGroups = (() => {
+    if (series.targeting_mode === 'by_language' && series.target_languages) {
+      return groups.filter((g) => g.is_active && series.target_languages!.includes(g.language))
+    }
+    if (series.targeting_mode === 'by_group' && series.series_targets) {
+      return series.series_targets.map((t) => t.group).filter(Boolean)
+    }
+    if (series.targeting_mode === 'hybrid') {
+      const targetGroupIds = new Set((series.series_targets ?? []).map((t) => t.group_id))
+      return groups.filter(
+        (g) => g.is_active && (series.target_languages?.includes(g.language) || targetGroupIds.has(g.id))
+      )
+    }
+    return []
+  })()
+
+  const totalMembers = targetedGroups.reduce((sum, g) => sum + (g.member_count ?? 0), 0)
 
   const canPause  = series.status === 'active' || series.status === 'scheduled'
   const canResume = series.status === 'paused'
@@ -238,6 +260,26 @@ export default function SeriesDetail() {
           {/* Action bar — admin only */}
           {isAdmin && (
             <div className="flex items-center gap-2 flex-wrap">
+              {series.status === 'draft' && (
+                <button
+                  onClick={() => activate.mutate(series.id)}
+                  disabled={activate.isPending}
+                  className="flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700 px-3 py-2 rounded-lg hover:bg-blue-50 transition-colors disabled:opacity-60"
+                >
+                  {activate.isPending ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
+                  Activer
+                </button>
+              )}
+              {series.status === 'scheduled' && (
+                <button
+                  onClick={() => deactivate.mutate(series.id)}
+                  disabled={deactivate.isPending}
+                  className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-60"
+                >
+                  {deactivate.isPending ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                  Brouillon
+                </button>
+              )}
               {canPause && (
                 <button
                   onClick={() => pause.mutate(series.id)}
@@ -332,6 +374,46 @@ export default function SeriesDetail() {
             </span>
           )}
         </div>
+
+        {/* Targeted groups section */}
+        {targetedGroups.length > 0 && (
+          <div className="mt-4">
+            <button
+              onClick={() => setShowGroups((v) => !v)}
+              className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+            >
+              <Users size={15} className="text-green-600" />
+              <span>{targetedGroups.length} groupes ciblés</span>
+              <span className="text-xs text-gray-400">({totalMembers.toLocaleString('fr-FR')} membres)</span>
+              {showGroups ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+
+            {showGroups && (
+              <div className="mt-3 max-h-64 overflow-y-auto border border-gray-100 rounded-xl">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">Groupe</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">Communauté</th>
+                      <th className="text-center px-3 py-2 font-medium text-gray-500">Langue</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-500">Membres</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {targetedGroups.map((g) => (
+                      <tr key={g.id} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-800">{g.name}</td>
+                        <td className="px-3 py-2 text-gray-400">{g.community_name ?? '—'}</td>
+                        <td className="px-3 py-2 text-center">{LANG_FLAGS[g.language] ?? g.language}</td>
+                        <td className="px-3 py-2 text-right text-gray-600">{g.member_count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Tabs */}

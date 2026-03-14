@@ -6,6 +6,8 @@ use App\Http\Controllers\MessageController;
 use App\Http\Controllers\SendController;
 use App\Http\Controllers\SeriesController;
 use App\Http\Controllers\StatsController;
+use App\Http\Controllers\WelcomeController;
+use App\Http\Controllers\WhatsAppController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -32,6 +34,11 @@ Route::middleware('baileys.api.key')->prefix('send')->group(function () {
     Route::post('/report/complete', [SendController::class, 'reportComplete']);
 });
 
+Route::middleware('baileys.api.key')->group(function () {
+    Route::post('/welcome/check', [WelcomeController::class, 'check']);
+    Route::post('/welcome/left', [WelcomeController::class, 'left']);
+});
+
 /*
 |--------------------------------------------------------------------------
 | Dashboard Routes (protected by Sanctum session auth)
@@ -43,9 +50,18 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     // --- Stats ---
     Route::get('/stats', [StatsController::class, 'index']);
 
+    // --- WhatsApp connection ---
+    Route::get('/whatsapp/status', [WhatsAppController::class, 'status']);
+    Route::get('/whatsapp/qr', [WhatsAppController::class, 'qr']);
+    Route::post('/whatsapp/restart', [WhatsAppController::class, 'restart'])->middleware('role:admin');
+
     // --- Groups ---
     Route::get('/groups', [GroupController::class, 'index']);
     Route::get('/groups/by-language/{lang}', [GroupController::class, 'byLanguage']);
+    Route::get('/groups/{id}/participants', [GroupController::class, 'participants']);
+    Route::get('/groups/{id}/members', [GroupController::class, 'members']);
+    Route::post('/groups/sync', [GroupController::class, 'sync'])->middleware('role:admin');
+    Route::put('/groups/{id}', [GroupController::class, 'update'])->middleware('role:admin');
 
     // --- Campaign Series (read) ---
     Route::get('/series', [SeriesController::class, 'index']);
@@ -63,6 +79,8 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         Route::post('/series/{id}/pause', [SeriesController::class, 'pause']);
         Route::post('/series/{id}/resume', [SeriesController::class, 'resume']);
         Route::post('/series/{id}/cancel', [SeriesController::class, 'cancel']);
+        Route::post('/series/{id}/activate', [SeriesController::class, 'activate']);
+        Route::post('/series/{id}/deactivate', [SeriesController::class, 'deactivate']);
         Route::post('/series/{id}/test-send', [SeriesController::class, 'testSend']);
     });
 

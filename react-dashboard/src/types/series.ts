@@ -15,11 +15,14 @@ export interface Group {
   id: number
   whatsapp_group_id: string
   name: string
+  community_name: string | null
   language: string
   country: string | null
   continent: string | null
   member_count: number
   is_active: boolean
+  welcome_enabled: boolean
+  welcome_message: string | null
 }
 
 export interface MessageTranslation {
@@ -59,6 +62,7 @@ export interface CampaignSeries {
   source_language: string | null
   notes: string | null
   messages?: CampaignMessage[]
+  series_targets?: { id: number; group_id: number; group: Group }[]
   created_at: string
 }
 

@@ -206,6 +206,87 @@ class SeriesController extends Controller
     }
 
     /**
+     * Activate a draft series (set status to scheduled without recalculating dates).
+     * Use this when messages are already created with their scheduled_at dates.
+     */
+    public function activate(int $id): JsonResponse
+    {
+        $series = CampaignSeries::findOrFail($id);
+
+        if ($series->status !== 'draft') {
+            return response()->json([
+                'message' => 'Only draft series can be activated.',
+            ], 422);
+        }
+
+        $pendingMessages = $series->messages()
+            ->where('status', 'pending')
+            ->orderBy('order_index')
+            ->get();
+
+        if ($pendingMessages->isEmpty()) {
+            return response()->json([
+                'message' => 'No pending messages found in this series.',
+            ], 422);
+        }
+
+        // Reschedule past messages: shift them forward preserving intervals
+        $now = now();
+        $firstPastMessage = $pendingMessages->first(fn ($m) => $m->scheduled_at <= $now);
+
+        if ($firstPastMessage) {
+            // Calculate the time shift needed
+            $shift = $now->diffInSeconds($firstPastMessage->scheduled_at, false);
+            // shift is negative (past), we need to add |shift| + 2 minutes buffer
+            $offsetSeconds = abs($shift) + 120;
+
+            $rescheduled = 0;
+            foreach ($pendingMessages as $msg) {
+                if ($msg->scheduled_at <= $now) {
+                    $newDate = $msg->scheduled_at->copy()->addSeconds($offsetSeconds);
+                    $msg->update(['scheduled_at' => $newDate]);
+                    $rescheduled++;
+                }
+            }
+
+            Log::info("Series #{$id} activated: rescheduled {$rescheduled} past messages (shifted by {$offsetSeconds}s).");
+        }
+
+        $series->update([
+            'status'         => 'scheduled',
+            'total_messages' => $series->messages()->count(),
+        ]);
+
+        return response()->json([
+            'message' => $firstPastMessage
+                ? "Series activated. {$rescheduled} messages past-due have been rescheduled."
+                : 'Series activated.',
+            'series'  => $series->fresh('messages'),
+        ]);
+    }
+
+    /**
+     * Set a scheduled series back to draft (pauses sending).
+     */
+    public function deactivate(int $id): JsonResponse
+    {
+        $series = CampaignSeries::findOrFail($id);
+
+        if (! in_array($series->status, ['scheduled', 'paused'], true)) {
+            return response()->json([
+                'message' => 'Only scheduled or paused series can be set to draft.',
+            ], 422);
+        }
+
+        $series->update(['status' => 'draft']);
+
+        return response()->json([
+            'message' => 'Series set back to draft.',
+            'series'  => $series->fresh(),
+        ]);
+    }
+
+    /**
      * Pause an active or scheduled series.
      */
     public function pause(int $id): JsonResponse

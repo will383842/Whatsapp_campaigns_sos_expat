@@ -10,15 +10,19 @@ class Group extends Model
     protected $fillable = [
         'whatsapp_group_id',
         'name',
+        'community_name',
         'language',
         'country',
         'continent',
         'member_count',
         'is_active',
+        'welcome_enabled',
+        'welcome_message',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'welcome_enabled' => 'boolean',
         'member_count' => 'integer',
     ];
 
@@ -35,5 +39,10 @@ class Group extends Model
     public function sendLogs(): HasMany
     {
         return $this->hasMany(SendLog::class);
+    }
+
+    public function members(): HasMany
+    {
+        return $this->hasMany(GroupMember::class);
     }
 }

@@ -22,20 +22,31 @@ class DispatchPendingMessages extends Command
 
     public function handle(): int
     {
-        // Use a DB transaction to atomically find and mark messages as 'sending'
-        // to prevent double dispatch if the scheduler fires twice in quick succession.
+        // Only dispatch ONE message per series at a time.
+        // Skip series that already have a message in 'sending' state.
         $messages = DB::transaction(function () {
-            $pending = CampaignMessage::where('status', 'pending')
-                ->where('scheduled_at', '<=', now())
-                ->lockForUpdate()
-                ->get();
+            // Find series that have messages being sent right now
+            $busySeriesIds = CampaignMessage::where('status', 'sending')
+                ->distinct()
+                ->pluck('series_id');
 
-            if ($pending->isNotEmpty()) {
-                CampaignMessage::whereIn('id', $pending->pluck('id'))
+            // Get the NEXT pending message per series (lowest order_index)
+            $candidates = CampaignMessage::where('status', 'pending')
+                ->where('scheduled_at', '<=', now())
+                ->whereHas('series', fn ($q) => $q->whereNotIn('status', ['draft']))
+                ->when($busySeriesIds->isNotEmpty(), fn ($q) => $q->whereNotIn('series_id', $busySeriesIds))
+                ->orderBy('series_id')
+                ->orderBy('order_index')
+                ->lockForUpdate()
+                ->get()
+                ->unique('series_id'); // Keep only the first (lowest order) per series
+
+            if ($candidates->isNotEmpty()) {
+                CampaignMessage::whereIn('id', $candidates->pluck('id'))
                     ->update(['status' => 'sending']);
             }
 
-            return $pending;
+            return $candidates;
         });
 
         if ($messages->isEmpty()) {
@@ -49,8 +60,8 @@ class DispatchPendingMessages extends Command
             dispatch(new SendMessageJob($message->id));
         }
 
-        $this->info("Dispatched {$count} message job(s).");
-        Log::info("campaigns:dispatch — dispatched {$count} message job(s).");
+        $this->info("Dispatched {$count} message(s) — one per series.");
+        Log::info("campaigns:dispatch — dispatched {$count} message(s), one per series.");
 
         return self::SUCCESS;
     }
