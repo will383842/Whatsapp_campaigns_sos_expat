@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getSocket, isConnected } from './whatsapp.js';
-import { enqueue, CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX } from './sendQueue.js';
+import { enqueue, canSendToday, getRemainingDailyQuota, CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX } from './sendQueue.js';
 import logger from './logger.js';
 
 const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8001';
@@ -207,10 +207,36 @@ export async function sendCampaignMessage(payload) {
   // Shuffle targets for randomisation
   const shuffled = shuffle([...targets]);
 
+  const remaining = getRemainingDailyQuota();
   logger.info(
-    { message_id, total: shuffled.length },
+    { message_id, total: shuffled.length, dailyRemaining: remaining },
     'Starting campaign send',
   );
+
+  // If daily limit already reached, skip entire campaign
+  if (!canSendToday()) {
+    logger.warn(
+      { message_id, total: shuffled.length, dailyRemaining: remaining },
+      'Daily message limit reached — entire campaign DEFERRED',
+    );
+    for (const target of shuffled) {
+      await reportGroupResult({
+        message_id,
+        group_wa_id: target.group_wa_id,
+        language: target.language,
+        content: target.content,
+        status: 'failed',
+        error_message: 'Daily message limit reached — will retry tomorrow',
+      });
+    }
+    await reportCampaignComplete({
+      message_id,
+      total: shuffled.length,
+      sent_count: 0,
+      failed_count: shuffled.length,
+    });
+    return;
+  }
 
   let sent_count = 0;
   let failed_count = 0;
@@ -219,6 +245,27 @@ export async function sendCampaignMessage(payload) {
     const { group_wa_id, language, content } = shuffled[i];
     const jid = toGroupJid(group_wa_id);
     const groupIndex = i;
+
+    // Check daily limit before each group send
+    if (!canSendToday()) {
+      logger.warn(
+        { message_id, group_wa_id, index: groupIndex + 1, total: shuffled.length },
+        'Daily limit reached mid-campaign — remaining groups skipped',
+      );
+      // Report remaining groups as failed
+      for (let j = i; j < shuffled.length; j++) {
+        failed_count++;
+        await reportGroupResult({
+          message_id,
+          group_wa_id: shuffled[j].group_wa_id,
+          language: shuffled[j].language,
+          content: shuffled[j].content,
+          status: 'failed',
+          error_message: 'Daily message limit reached',
+        });
+      }
+      break;
+    }
 
     // Each group send goes through the global queue to prevent
     // interleaving with other campaigns or welcome messages
@@ -257,7 +304,7 @@ export async function sendCampaignMessage(payload) {
         await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message });
       }
 
-      // --- Random delay after send (anti-spam) ---
+      // --- Conservative delay after send (anti-spam) ---
       const delay = randomInt(CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX);
       logger.info(
         { delay, index: groupIndex + 1, total: shuffled.length },

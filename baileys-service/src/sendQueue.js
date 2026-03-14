@@ -4,41 +4,92 @@ const log = logger.child({ module: 'send-queue' });
 
 /**
  * Global send queue — serializes ALL WhatsApp message sends.
- * Prevents campaign sends, welcome messages, and test sends from
- * interleaving and triggering WhatsApp anti-spam detection.
  *
- * Architecture:
- *   - One queue, FIFO
- *   - Each job is a function that returns a Promise
- *   - Configurable delay between jobs (anti-spam)
- *   - Campaign sends push one job PER GROUP (not one per campaign)
- *     so welcome messages can be interleaved without starvation
+ * Safety-first approach:
+ *   - One queue, FIFO with priority support
+ *   - Conservative delays between sends to mimic human behavior
+ *   - Daily message limit to avoid WhatsApp flagging the account
+ *   - Welcome messages have priority but still respect delays
  */
 
-/** @type {Array<{ fn: () => Promise<void>, label: string, priority: number }>} */
+/** @type {Array<{ fn: () => Promise<void>, label: string, priority: number, type: string }>} */
 const queue = [];
 
 let processing = false;
 
-/** Minimum delay between any two WhatsApp sends (ms) */
-const MIN_DELAY_BETWEEN_SENDS = 3_000; // 3 seconds
+// ---------------------------------------------------------------------------
+// Timing configuration — intentionally conservative
+// ---------------------------------------------------------------------------
 
-/** Delay between campaign group sends (ms) — randomized on top */
-export const CAMPAIGN_DELAY_MIN = 30_000;
-export const CAMPAIGN_DELAY_MAX = 60_000;
+/** Minimum gap between ANY two WhatsApp sends (ms) */
+const MIN_DELAY_BETWEEN_SENDS = 8_000; // 8 seconds
 
-/** Delay before welcome message send (ms) — randomized */
-export const WELCOME_DELAY_MIN = 2_000;
-export const WELCOME_DELAY_MAX = 5_000;
+/** Delay between campaign group sends — randomized */
+export const CAMPAIGN_DELAY_MIN = 45_000;  // 45 seconds
+export const CAMPAIGN_DELAY_MAX = 90_000;  // 90 seconds (1.5 min)
+
+/** Delay before welcome message send — randomized */
+export const WELCOME_DELAY_MIN = 5_000;   // 5 seconds
+export const WELCOME_DELAY_MAX = 15_000;  // 15 seconds
+
+// ---------------------------------------------------------------------------
+// Daily message counter — resets at midnight UTC
+// ---------------------------------------------------------------------------
+
+/** Maximum messages per day (campaigns + welcome combined) */
+const MAX_MESSAGES_PER_DAY = parseInt(process.env.MAX_MESSAGES_PER_DAY || '200', 10);
+
+let dailySentCount = 0;
+let dailyDate = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+
+function resetDailyCounterIfNeeded() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== dailyDate) {
+    log.info(
+      { previousDate: dailyDate, previousCount: dailySentCount, newDate: today },
+      'Daily counter reset',
+    );
+    dailySentCount = 0;
+    dailyDate = today;
+  }
+}
+
+function incrementDailyCounter() {
+  resetDailyCounterIfNeeded();
+  dailySentCount++;
+}
+
+/**
+ * Check if we can still send today.
+ * @returns {boolean}
+ */
+export function canSendToday() {
+  resetDailyCounterIfNeeded();
+  return dailySentCount < MAX_MESSAGES_PER_DAY;
+}
+
+/**
+ * Get remaining daily quota.
+ * @returns {number}
+ */
+export function getRemainingDailyQuota() {
+  resetDailyCounterIfNeeded();
+  return Math.max(0, MAX_MESSAGES_PER_DAY - dailySentCount);
+}
+
+// ---------------------------------------------------------------------------
+// Queue management
+// ---------------------------------------------------------------------------
 
 /**
  * Add a send job to the global queue.
  * @param {() => Promise<void>} fn - The async function to execute
  * @param {string} label - Human-readable label for logging
  * @param {'high'|'normal'|'low'} [priority='normal'] - Priority level
+ * @param {string} [type='campaign'] - 'campaign' | 'welcome' | 'test'
  * @returns {Promise<void>} - Resolves when the job completes
  */
-export function enqueue(fn, label = 'unknown', priority = 'normal') {
+export function enqueue(fn, label = 'unknown', priority = 'normal', type = 'campaign') {
   const priorityNum = priority === 'high' ? 0 : priority === 'low' ? 2 : 1;
 
   return new Promise((resolve, reject) => {
@@ -53,6 +104,7 @@ export function enqueue(fn, label = 'unknown', priority = 'normal') {
       },
       label,
       priority: priorityNum,
+      type,
     };
 
     // Insert at correct position based on priority
@@ -66,7 +118,7 @@ export function enqueue(fn, label = 'unknown', priority = 'normal') {
     }
     if (!inserted) queue.push(job);
 
-    log.debug({ label, priority, queueSize: queue.length }, 'Job enqueued');
+    log.debug({ label, priority, type, queueSize: queue.length }, 'Job enqueued');
     processQueue();
   });
 }
@@ -76,9 +128,10 @@ export function enqueue(fn, label = 'unknown', priority = 'normal') {
  * @param {() => Promise<void>} fn
  * @param {string} label
  * @param {'high'|'normal'|'low'} [priority='normal']
+ * @param {string} [type='welcome']
  */
-export function enqueueAsync(fn, label = 'unknown', priority = 'normal') {
-  enqueue(fn, label, priority).catch((err) => {
+export function enqueueAsync(fn, label = 'unknown', priority = 'normal', type = 'welcome') {
+  enqueue(fn, label, priority, type).catch((err) => {
     log.error({ label, err: err.message }, 'Queued job failed');
   });
 }
@@ -92,16 +145,34 @@ async function processQueue() {
   processing = true;
 
   while (queue.length > 0) {
+    resetDailyCounterIfNeeded();
+
     const job = queue.shift();
-    log.debug({ label: job.label, remaining: queue.length }, 'Processing job');
+
+    // Check daily limit — welcome messages always pass, campaigns are blocked
+    if (job.type === 'campaign' && dailySentCount >= MAX_MESSAGES_PER_DAY) {
+      log.warn(
+        { label: job.label, dailySentCount, max: MAX_MESSAGES_PER_DAY },
+        'Daily message limit reached — campaign send SKIPPED. Will resume tomorrow.',
+      );
+      // Resolve the promise so the campaign flow continues (reports as skipped)
+      try { await job.fn(); } catch { /* ignore */ }
+      continue;
+    }
+
+    log.info(
+      { label: job.label, type: job.type, remaining: queue.length, dailySent: dailySentCount, dailyMax: MAX_MESSAGES_PER_DAY },
+      'Processing send job',
+    );
 
     try {
       await job.fn();
+      incrementDailyCounter();
     } catch (err) {
       log.error({ label: job.label, err: err.message }, 'Job execution error');
     }
 
-    // Minimum gap between any two sends
+    // Conservative gap between any two sends
     if (queue.length > 0) {
       await sleep(MIN_DELAY_BETWEEN_SENDS);
     }
@@ -110,10 +181,21 @@ async function processQueue() {
   processing = false;
 }
 
+// ---------------------------------------------------------------------------
+// Monitoring
+// ---------------------------------------------------------------------------
+
 /**
- * Get current queue depth (for monitoring).
- * @returns {{ size: number, processing: boolean }}
+ * Get current queue and daily stats (for /health endpoint).
+ * @returns {{ size: number, processing: boolean, dailySent: number, dailyMax: number, dailyRemaining: number }}
  */
 export function getQueueStats() {
-  return { size: queue.length, processing };
+  resetDailyCounterIfNeeded();
+  return {
+    size: queue.length,
+    processing,
+    dailySent: dailySentCount,
+    dailyMax: MAX_MESSAGES_PER_DAY,
+    dailyRemaining: Math.max(0, MAX_MESSAGES_PER_DAY - dailySentCount),
+  };
 }
