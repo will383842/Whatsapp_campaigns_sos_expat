@@ -18,6 +18,7 @@ class Group extends Model
         'is_active',
         'welcome_enabled',
         'welcome_message',
+        'invite_link',
     ];
 
     protected $casts = [

@@ -37,6 +37,8 @@ Route::middleware('baileys.api.key')->prefix('send')->group(function () {
 Route::middleware('baileys.api.key')->group(function () {
     Route::post('/welcome/check', [WelcomeController::class, 'check']);
     Route::post('/welcome/left', [WelcomeController::class, 'left']);
+    Route::get('/groups/wa-ids', [GroupController::class, 'waIds']);
+    Route::post('/groups/update-invite-links', [GroupController::class, 'updateInviteLinks']);
 });
 
 /*

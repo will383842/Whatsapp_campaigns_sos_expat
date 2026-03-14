@@ -186,6 +186,46 @@ class GroupController extends Controller
     }
 
     /**
+     * GET /api/groups/wa-ids
+     * Protected by Baileys API key. Returns all whatsapp_group_ids from the DB.
+     * Used by Baileys lock-all to only process registered groups.
+     */
+    public function waIds(): JsonResponse
+    {
+        $ids = Group::where('is_active', true)
+            ->pluck('whatsapp_group_id')
+            ->toArray();
+
+        return response()->json(['ids' => $ids, 'count' => count($ids)]);
+    }
+
+    /**
+     * POST /api/groups/update-invite-links
+     * Protected by Baileys API key. Batch update invite links for groups.
+     * Body: { links: [ { whatsapp_group_id: "xxx", invite_link: "https://..." }, ... ] }
+     */
+    public function updateInviteLinks(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'links' => 'required|array',
+            'links.*.whatsapp_group_id' => 'required|string',
+            'links.*.invite_link' => 'required|string',
+        ]);
+
+        $updated = 0;
+
+        foreach ($validated['links'] as $item) {
+            $count = Group::where('whatsapp_group_id', $item['whatsapp_group_id'])
+                ->update(['invite_link' => $item['invite_link']]);
+            $updated += $count;
+        }
+
+        Log::info("Invite links updated for {$updated} groups.");
+
+        return response()->json(['success' => true, 'updated' => $updated]);
+    }
+
+    /**
      * Update a group (language, is_active, country, continent).
      */
     public function update(Request $request, int $id): JsonResponse

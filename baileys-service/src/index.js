@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import axios from 'axios';
 import { connectToWhatsApp, getSocket, isConnected, getLastQr } from './whatsapp.js';
 import QRCode from 'qrcode';
 import { sendCampaignMessage, testSend } from './sender.js';
@@ -8,7 +9,20 @@ import { getQueueStats } from './sendQueue.js';
 import logger from './logger.js';
 
 const PORT = parseInt(process.env.PORT || '3002', 10);
+const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8001';
 const LARAVEL_API_KEY = process.env.LARAVEL_API_KEY || '';
+
+/**
+ * Axios instance for calling Laravel API (internal network).
+ */
+const laravelClient = axios.create({
+  baseURL: LARAVEL_API_URL,
+  timeout: 15_000,
+  headers: {
+    'Content-Type': 'application/json',
+    'X-API-Key': LARAVEL_API_KEY,
+  },
+});
 
 const app = express();
 
@@ -293,14 +307,14 @@ let lockAllStatus = null;
 
 /**
  * POST /groups/lock-all
- * Protected endpoint. Locks all groups so only admins can:
+ * Protected endpoint. Locks ONLY groups registered in Laravel DB so only admins can:
  *   - edit group info (name, description, picture)
  *   - add new members
  *
  * EXTREMELY SLOW on purpose (~3.5 min per group, ~4 hours total for 68 groups)
  * to avoid any risk of WhatsApp blocking the account.
  *
- * After locking, retrieves the invite link for each group.
+ * After locking, retrieves invite links and saves them to Laravel DB.
  * Responds immediately. Check progress via GET /groups/lock-all/status.
  */
 app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
@@ -314,17 +328,36 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
 
   const sock = getSocket();
 
+  // Step 0: Get the whitelist of group IDs from Laravel DB
+  let allowedIds;
+  try {
+    const { data } = await laravelClient.get('/api/groups/wa-ids');
+    allowedIds = new Set(data.ids || []);
+    logger.info({ count: allowedIds.size }, 'Fetched allowed group IDs from Laravel DB');
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch group IDs from Laravel: ' + err.message });
+  }
+
+  if (allowedIds.size === 0) {
+    return res.json({ success: false, error: 'No groups found in Laravel DB' });
+  }
+
+  // Fetch all WhatsApp groups and filter to only DB-registered ones
   let groups;
   try {
     const allGroups = await sock.groupFetchAllParticipating();
-    groups = Object.values(allGroups).filter(g => !g.isCommunity && !g.isCommunityAnnounce);
+    groups = Object.values(allGroups).filter(g => {
+      const waId = g.id.replace('@g.us', '');
+      return allowedIds.has(waId) && !g.isCommunity && !g.isCommunityAnnounce;
+    });
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch groups: ' + err.message });
+    return res.status(500).json({ error: 'Failed to fetch WhatsApp groups: ' + err.message });
   }
 
   lockAllStatus = {
     running: true,
     total: groups.length,
+    dbTotal: allowedIds.size,
     processed: 0,
     locked: 0,
     adminAdd: 0,
@@ -337,7 +370,7 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
   // Respond immediately
   res.json({
     success: true,
-    message: `Lock-all started for ${groups.length} groups. ~3.5 min/group = ~${Math.round(groups.length * 3.5)} min total. Check /groups/lock-all/status for progress.`,
+    message: `Lock-all started for ${groups.length} groups (filtered from DB: ${allowedIds.size}). ~3.5 min/group = ~${Math.round(groups.length * 3.5)} min total.`,
     total: groups.length,
     estimatedDuration: `~${Math.round(groups.length * 3.5 / 60)} hours`,
   });
@@ -378,14 +411,26 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
       await new Promise(r => setTimeout(r, 30_000 + Math.floor(Math.random() * 30_000)));
 
       // --- Step 3: Retrieve the invite link ---
+      let inviteLink = null;
       try {
         const inviteCode = await sock.groupInviteCode(jid);
-        const inviteLink = inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : null;
-        lockAllStatus.inviteLinks.push({ groupWaId, name, inviteLink, language: group.desc || '' });
+        inviteLink = inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : null;
+        lockAllStatus.inviteLinks.push({ groupWaId, name, inviteLink });
         logger.info({ jid, name, inviteLink, step: '3/3' }, 'Invite link retrieved');
       } catch (err) {
         logger.warn({ jid, name, err: err.message }, 'Failed to get invite link');
         lockAllStatus.inviteLinks.push({ groupWaId, name, inviteLink: null, error: err.message });
+      }
+
+      // --- Step 4: Save invite link to Laravel DB immediately ---
+      if (inviteLink) {
+        try {
+          await laravelClient.post('/api/groups/update-invite-links', {
+            links: [{ whatsapp_group_id: groupWaId, invite_link: inviteLink }],
+          });
+        } catch (err) {
+          logger.warn({ groupWaId, err: err.message }, 'Failed to save invite link to Laravel');
+        }
       }
 
       lockAllStatus.processed++;
