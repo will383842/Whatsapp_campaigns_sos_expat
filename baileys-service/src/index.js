@@ -478,6 +478,200 @@ app.get('/groups/lock-all/status', requireApiKey, (_req, res) => {
 });
 
 /**
+ * In-memory status for the add-admin operation.
+ */
+let addAdminStatus = null;
+
+/**
+ * POST /groups/add-admin
+ * Protected endpoint. Adds a phone number to all DB-registered groups and promotes to admin.
+ *
+ * EXTREMELY SLOW: ~8 min per group (add + delay + promote + delay + long pause).
+ * Spread over multiple days: processes max 12 groups per run (~1.5 hours).
+ * Call multiple times on different days to complete all groups.
+ *
+ * Body: { phone: "33607870038" } (without + prefix)
+ *
+ * Responds immediately. Check progress via GET /groups/add-admin/status.
+ */
+app.post('/groups/add-admin', requireApiKey, async (req, res) => {
+  if (!isConnected()) {
+    return res.status(503).json({ error: 'WhatsApp is not connected' });
+  }
+
+  if (addAdminStatus?.running) {
+    return res.json({ success: false, error: 'Add-admin already in progress', status: addAdminStatus });
+  }
+
+  // Don't run if lock-all is in progress
+  if (lockAllStatus?.running) {
+    return res.json({ success: false, error: 'Cannot run while lock-all is in progress. Wait for it to complete.' });
+  }
+
+  const { phone } = req.body || {};
+  if (!phone) {
+    return res.status(400).json({ error: 'phone is required (e.g. "33607870038")' });
+  }
+
+  const participantJid = phone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+  const sock = getSocket();
+
+  // Verify the number is on WhatsApp
+  try {
+    const [exists] = await sock.onWhatsApp(participantJid);
+    if (!exists?.exists) {
+      return res.json({ success: false, error: `+${phone} is not on WhatsApp` });
+    }
+    logger.info({ phone, jid: exists.jid }, 'Phone verified on WhatsApp');
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to verify phone: ' + err.message });
+  }
+
+  // Get group whitelist from Laravel DB
+  let allowedIds;
+  try {
+    const { data } = await laravelClient.get('/api/groups/wa-ids');
+    allowedIds = new Set(data.ids || []);
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch group IDs from Laravel: ' + err.message });
+  }
+
+  // Fetch WhatsApp groups, filter to DB-registered, exclude groups where already member
+  let groups;
+  try {
+    const allGroups = await sock.groupFetchAllParticipating();
+    const dbGroups = Object.values(allGroups).filter(g => {
+      const waId = g.id.replace('@g.us', '');
+      return allowedIds.has(waId) && !g.isCommunity && !g.isCommunityAnnounce;
+    });
+
+    // Filter out groups where the person is already a participant
+    groups = dbGroups.filter(g => {
+      const isAlready = g.participants?.some(p => p.id === participantJid);
+      if (isAlready) logger.info({ group: g.subject, phone }, 'Already in group — skipping');
+      return !isAlready;
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch groups: ' + err.message });
+  }
+
+  // Limit to 12 groups per run (~1.5 hours) to stay ultra-safe
+  const MAX_PER_RUN = 12;
+  const batch = groups.slice(0, MAX_PER_RUN);
+  const remaining = groups.length - batch.length;
+
+  addAdminStatus = {
+    running: true,
+    phone,
+    total: groups.length,
+    batchSize: batch.length,
+    remainingForNextRun: remaining,
+    processed: 0,
+    added: 0,
+    promoted: 0,
+    alreadyIn: 0,
+    failed: [],
+    current: null,
+    startedAt: new Date().toISOString(),
+  };
+
+  res.json({
+    success: true,
+    message: `Add-admin started for ${batch.length} groups (${remaining} remaining for next run). ~8 min/group.`,
+    batchSize: batch.length,
+    totalRemaining: groups.length,
+    estimatedDuration: `~${Math.round(batch.length * 8)} min`,
+    note: remaining > 0 ? `Run again tomorrow to process the next ${Math.min(remaining, MAX_PER_RUN)} groups.` : 'All groups will be processed in this run.',
+  });
+
+  // Process in background — EXTREMELY SLOWLY
+  (async () => {
+    for (let i = 0; i < batch.length; i++) {
+      const group = batch[i];
+      const jid = group.id;
+      const name = group.subject || jid;
+      addAdminStatus.current = `[${i + 1}/${batch.length}] ${name}`;
+
+      // --- Step 1: Add to group ---
+      try {
+        const result = await sock.groupParticipantsUpdate(jid, [participantJid], 'add');
+        const status = result?.[0]?.status || 'unknown';
+
+        if (status === '200' || status === 200) {
+          addAdminStatus.added++;
+          logger.info({ jid, name, phone, step: '1/2', progress: `${i + 1}/${batch.length}` }, 'Added to group');
+        } else if (status === '409' || status === 409) {
+          addAdminStatus.alreadyIn++;
+          logger.info({ jid, name, phone }, 'Already in group');
+        } else {
+          logger.warn({ jid, name, phone, status, result }, 'Unexpected add result');
+          addAdminStatus.added++; // Assume success if no error thrown
+        }
+      } catch (err) {
+        logger.warn({ jid, name, phone, err: err.message }, 'Failed to add to group');
+        addAdminStatus.failed.push({ name, action: 'add', error: err.message });
+        addAdminStatus.processed++;
+        // Long pause even on failure
+        await new Promise(r => setTimeout(r, 120_000 + Math.floor(Math.random() * 60_000)));
+        continue; // Skip promote if add failed
+      }
+
+      // 90-150s delay before promoting
+      await new Promise(r => setTimeout(r, 90_000 + Math.floor(Math.random() * 60_000)));
+
+      // --- Step 2: Promote to admin ---
+      try {
+        await sock.groupParticipantsUpdate(jid, [participantJid], 'promote');
+        addAdminStatus.promoted++;
+        logger.info({ jid, name, phone, step: '2/2' }, 'Promoted to admin');
+      } catch (err) {
+        logger.warn({ jid, name, phone, err: err.message }, 'Failed to promote to admin');
+        addAdminStatus.failed.push({ name, action: 'promote', error: err.message });
+      }
+
+      addAdminStatus.processed++;
+
+      // --- Very long delay between groups: 3-5 minutes ---
+      if (i < batch.length - 1) {
+        const groupDelay = 180_000 + Math.floor(Math.random() * 120_000);
+        logger.info(
+          { delay: Math.round(groupDelay / 1000), progress: `${i + 1}/${batch.length}` },
+          'Waiting before next group (add-admin)...',
+        );
+        await new Promise(r => setTimeout(r, groupDelay));
+      }
+    }
+
+    addAdminStatus.running = false;
+    addAdminStatus.current = null;
+    addAdminStatus.completedAt = new Date().toISOString();
+    logger.info({
+      phone,
+      batchSize: batch.length,
+      added: addAdminStatus.added,
+      promoted: addAdminStatus.promoted,
+      failed: addAdminStatus.failed.length,
+      remainingForNextRun: remaining,
+    }, 'Add-admin batch completed');
+  })().catch(err => {
+    addAdminStatus.running = false;
+    addAdminStatus.error = err.message;
+    logger.error({ err: err.message }, 'Add-admin operation failed');
+  });
+});
+
+/**
+ * GET /groups/add-admin/status
+ * Protected endpoint. Returns the progress of the add-admin operation.
+ */
+app.get('/groups/add-admin/status', requireApiKey, (_req, res) => {
+  if (!addAdminStatus) {
+    return res.json({ started: false, message: 'No add-admin operation has been started.' });
+  }
+  return res.json(addAdminStatus);
+});
+
+/**
  * POST /send/welcome
  * Protected endpoint. Sends a batch welcome message to a single group.
  * Called by Laravel daily cron. Goes through the global queue.
