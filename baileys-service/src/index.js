@@ -509,11 +509,11 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
 
       lockAllStatus.processed++;
 
-      // --- Long delay between groups: 60-120s ---
+      // --- Delay between groups: 20-40s (3x faster) ---
       if (i < groups.length - 1) {
-        const groupDelay = 60_000 + Math.floor(Math.random() * 60_000);
+        const groupDelay = 20_000 + Math.floor(Math.random() * 20_000);
         const elapsed = Math.round((Date.now() - new Date(lockAllStatus.startedAt).getTime()) / 60_000);
-        const remaining = Math.round((groups.length - i - 1) * 3.5);
+        const remaining = Math.round((groups.length - i - 1) * 1.2);
         logger.info(
           { delay: Math.round(groupDelay / 1000), elapsed: `${elapsed}min`, remaining: `~${remaining}min`, progress: `${i + 1}/${groups.length}` },
           'Waiting before next group...',
