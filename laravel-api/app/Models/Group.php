@@ -19,6 +19,7 @@ class Group extends Model
         'welcome_enabled',
         'welcome_message',
         'invite_link',
+        'firestore_group_id',
     ];
 
     protected $casts = [

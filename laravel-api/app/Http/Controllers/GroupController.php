@@ -226,6 +226,32 @@ class GroupController extends Controller
     }
 
     /**
+     * GET /api/groups/firestore-links
+     * Protected by Baileys API key. Returns all mapped groups with their
+     * Firestore group IDs and current invite links.
+     * Used by Firebase Cloud Function to sync links to Firestore.
+     */
+    public function firestoreLinks(): JsonResponse
+    {
+        $groups = Group::whereNotNull('firestore_group_id')
+            ->whereNotNull('invite_link')
+            ->where('is_active', true)
+            ->get(['firestore_group_id', 'invite_link', 'name']);
+
+        $links = $groups->map(fn ($g) => [
+            'firestore_group_id' => $g->firestore_group_id,
+            'invite_link' => $g->invite_link,
+            'name' => $g->name,
+        ])->values();
+
+        return response()->json([
+            'success' => true,
+            'count' => $links->count(),
+            'links' => $links,
+        ]);
+    }
+
+    /**
      * Update a group (language, is_active, country, continent).
      */
     public function update(Request $request, int $id): JsonResponse

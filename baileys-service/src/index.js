@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import axios from 'axios';
-import { connectToWhatsApp, getSocket, isConnected, getLastQr } from './whatsapp.js';
+import { connectToWhatsApp, getSocket, isConnected, getLastQr, sendTelegramAlert } from './whatsapp.js';
 import QRCode from 'qrcode';
 import { sendCampaignMessage, testSend } from './sender.js';
 import { sendWelcomeBatch } from './welcome.js';
@@ -11,6 +11,8 @@ import logger from './logger.js';
 const PORT = parseInt(process.env.PORT || '3002', 10);
 const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8001';
 const LARAVEL_API_KEY = process.env.LARAVEL_API_KEY || '';
+const FIREBASE_SYNC_URL = process.env.FIREBASE_SYNC_URL || '';
+const FIREBASE_SYNC_API_KEY = process.env.FIREBASE_SYNC_API_KEY || '';
 
 /**
  * Axios instance for calling Laravel API (internal network).
@@ -300,6 +302,78 @@ app.post('/send', requireApiKey, (req, res) => {
 });
 
 /**
+ * Sync invite links to Firestore via the Firebase Cloud Function.
+ * Called after lock-all completes. First fetches the full list from Laravel
+ * (which has firestore_group_id mappings) and sends to Firebase.
+ *
+ * @param {Array<{groupWaId: string, name: string, inviteLink: string|null}>} rawLinks
+ */
+async function syncInviteLinksToFirestore(rawLinks) {
+  if (!FIREBASE_SYNC_URL || !FIREBASE_SYNC_API_KEY) {
+    logger.warn('FIREBASE_SYNC_URL or FIREBASE_SYNC_API_KEY not configured — skipping Firestore sync');
+    sendTelegramAlert(
+      `⚠️ <b>Mise à jour auto des liens WhatsApp sur SOS-Expat non configurée</b>\n\n` +
+      `Les liens ont bien été sauvegardés dans notre base de données, mais la synchronisation ` +
+      `automatique vers le site SOS-Expat n'est pas encore configurée.\n\n` +
+      `💡 Contactez le support technique pour activer la sync automatique (FIREBASE_SYNC_URL).`
+    );
+    return;
+  }
+
+  try {
+    // Fetch groups with firestore_group_id from Laravel
+    const resp = await laravelClient.get('/api/groups/firestore-links');
+    const { links: firestoreLinks } = resp.data;
+
+    if (!firestoreLinks || firestoreLinks.length === 0) {
+      logger.warn('No firestore-mapped groups found in Laravel — run "php artisan groups:map-firestore" first');
+      return;
+    }
+
+    // Send to Firebase Cloud Function
+    const firebaseResp = await axios.post(FIREBASE_SYNC_URL, {
+      links: firestoreLinks,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': FIREBASE_SYNC_API_KEY,
+      },
+      timeout: 30_000,
+    });
+
+    const { updated, total, notFound } = firebaseResp.data;
+    logger.info({ updated, total }, 'Firestore invite links synced successfully');
+
+    if (updated > 0) {
+      sendTelegramAlert(
+        `✅ <b>Liens d'invitation WhatsApp mis à jour sur SOS-Expat</b>\n\n` +
+        `${updated} lien(s) d'invitation mis à jour sur le site SOS-Expat.\n` +
+        `Les nouveaux inscrits recevront les liens corrects pour rejoindre les groupes WhatsApp.\n\n` +
+        (notFound?.length
+          ? `⚠️ ${notFound.length} groupe(s) n'ont pas pu être associés — vérifiez le mapping.`
+          : `✅ Tous les ${total} groupes sont à jour.`)
+      );
+    } else {
+      sendTelegramAlert(
+        `✅ <b>Vérification des liens WhatsApp — tout est OK</b>\n\n` +
+        `Les ${total} liens d'invitation WhatsApp sur SOS-Expat sont déjà à jour.\n` +
+        `Aucune modification nécessaire.`
+      );
+    }
+  } catch (err) {
+    logger.error({ err: err.message }, 'Failed to sync invite links to Firestore — links are saved in Laravel DB, manual sync possible');
+
+    sendTelegramAlert(
+      `⚠️ <b>Mise à jour des liens WhatsApp sur SOS-Expat échouée</b>\n\n` +
+      `Les liens d'invitation n'ont pas pu être mis à jour automatiquement sur le site SOS-Expat.\n\n` +
+      `💡 Pas de panique : les liens sont sauvegardés dans notre base de données. ` +
+      `Les anciens liens sur SOS-Expat restent fonctionnels sauf s'ils ont été modifiés.\n\n` +
+      `Erreur technique : ${err.message}`
+    );
+  }
+}
+
+/**
  * In-memory status for the lock-all operation.
  * Long-running: ~3.5 min per group = ~4 hours for 68 groups.
  */
@@ -451,17 +525,63 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
     lockAllStatus.running = false;
     lockAllStatus.current = null;
     lockAllStatus.completedAt = new Date().toISOString();
+
+    const linksOk = lockAllStatus.inviteLinks.filter(l => l.inviteLink).length;
+    const failedCount = lockAllStatus.failed.length;
+
     logger.info({
       total: lockAllStatus.total,
       locked: lockAllStatus.locked,
       adminAdd: lockAllStatus.adminAdd,
-      failedCount: lockAllStatus.failed.length,
-      linksRetrieved: lockAllStatus.inviteLinks.filter(l => l.inviteLink).length,
+      failedCount,
+      linksRetrieved: linksOk,
     }, 'Lock-all operation completed');
+
+    // --- Telegram: report completion ---
+    const elapsed = Math.round((Date.now() - new Date(lockAllStatus.startedAt).getTime()) / 60_000);
+    const hours = Math.floor(elapsed / 60);
+    const mins = elapsed % 60;
+    const durationStr = hours > 0 ? `${hours}h${mins}min` : `${mins} minutes`;
+
+    if (failedCount === 0) {
+      sendTelegramAlert(
+        `✅ <b>Sécurisation des groupes WhatsApp terminée !</b>\n\n` +
+        `Tous les ${lockAllStatus.total} groupes WhatsApp SOS-Expat ont été sécurisés :\n` +
+        `• Seuls les admins peuvent ajouter des membres\n` +
+        `• Seuls les admins peuvent modifier les paramètres\n` +
+        `• ${linksOk} liens d'invitation ont été sauvegardés\n\n` +
+        `⏱ Durée totale : ${durationStr}\n\n` +
+        `📌 Les liens d'invitation restent fonctionnels — les nouveaux inscrits sur SOS-Expat pourront toujours rejoindre les groupes.\n\n` +
+        `Mise à jour des liens sur SOS-Expat en cours...`
+      );
+    } else {
+      sendTelegramAlert(
+        `⚠️ <b>Sécurisation des groupes WhatsApp terminée avec ${failedCount} erreur(s)</b>\n\n` +
+        `${lockAllStatus.locked} groupes sécurisés sur ${lockAllStatus.total}\n` +
+        `${linksOk} liens d'invitation sauvegardés\n` +
+        `${failedCount} groupe(s) en erreur — à vérifier manuellement\n\n` +
+        `⏱ Durée totale : ${durationStr}\n\n` +
+        `💡 Les groupes en erreur ne sont peut-être pas verrouillés. ` +
+        `Contactez le support technique pour vérifier.`
+      );
+    }
+
+    // --- Sync invite links to Firestore (SOS Expat) ---
+    await syncInviteLinksToFirestore(lockAllStatus.inviteLinks);
   })().catch(err => {
     lockAllStatus.running = false;
     lockAllStatus.error = err.message;
     logger.error({ err: err.message }, 'Lock-all operation failed');
+
+    // --- Telegram: report failure ---
+    sendTelegramAlert(
+      `🔴 <b>ERREUR — Sécurisation des groupes WhatsApp interrompue</b>\n\n` +
+      `Le processus de sécurisation des groupes a planté.\n` +
+      `${lockAllStatus?.processed || 0} groupes traités sur ${lockAllStatus?.total || '?'} avant l'erreur.\n\n` +
+      `❌ Erreur technique : ${err.message}\n\n` +
+      `💡 Les groupes déjà traités restent sécurisés. ` +
+      `Contactez le support technique pour relancer le processus sur les groupes restants.`
+    );
   });
 });
 
