@@ -65,31 +65,15 @@ class WelcomeController extends Controller
             Log::info("GroupMember saved: {$memberName} (+{$phone}) in group #{$group->id} ({$group->name})");
         }
 
-        if (! $group->is_active || ! $group->welcome_enabled) {
-            return response()->json(['send' => false, 'reason' => 'welcome_disabled']);
-        }
-
-        // Use custom message or default for the group's language
-        $template = $group->welcome_message
-            ?: (self::DEFAULT_MESSAGES[$group->language] ?? self::DEFAULT_MESSAGES['en']);
-
-        $message = str_replace(
-            ['{name}', '{group_name}'],
-            [$memberName, $group->name],
-            $template
-        );
-
-        // Mark welcome as sent
-        if (isset($member)) {
-            $member->update(['welcome_sent' => true]);
-        }
-
-        Log::info("Welcome message for {$memberName} in group #{$group->id} ({$group->name})");
+        // Welcome messages are now sent in daily batches by the cron command.
+        // We only save the member here — the cron will group all new members
+        // and send ONE welcome message per group per day.
+        Log::info("Member {$memberName} saved for batch welcome in group #{$group->id} ({$group->name})");
 
         return response()->json([
-            'send'     => true,
-            'message'  => $message,
-            'language' => $group->language,
+            'send'   => false,
+            'reason' => 'batch_pending',
+            'saved'  => true,
         ]);
     }
 

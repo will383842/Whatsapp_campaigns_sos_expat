@@ -16,6 +16,13 @@ Schedule::command('campaigns:dispatch')->everyMinute()->withoutOverlapping();
 // Clean stuck messages every 30 minutes (messages in "sending" state for > 2 hours).
 Schedule::command('campaigns:clean-stuck')->everyThirtyMinutes()->withoutOverlapping();
 
+// Send batch welcome messages once a day at 10:00 Paris time.
+// Groups all new members per group into ONE message instead of individual sends.
+Schedule::command('welcome:send-batch')
+    ->dailyAt('10:00')
+    ->timezone('Europe/Paris')
+    ->withoutOverlapping();
+
 // Weekly campaign status report via Telegram (every Monday at 9:00 Paris time)
 Schedule::command('campaigns:weekly-report')
     ->weeklyOn(1, '09:00')

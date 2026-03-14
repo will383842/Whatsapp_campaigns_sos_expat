@@ -22,22 +22,22 @@ let processing = false;
 // ---------------------------------------------------------------------------
 
 /** Minimum gap between ANY two WhatsApp sends (ms) */
-const MIN_DELAY_BETWEEN_SENDS = 8_000; // 8 seconds
+const MIN_DELAY_BETWEEN_SENDS = 30_000; // 30 seconds
 
 /** Delay between campaign group sends — randomized */
-export const CAMPAIGN_DELAY_MIN = 45_000;  // 45 seconds
-export const CAMPAIGN_DELAY_MAX = 90_000;  // 90 seconds (1.5 min)
+export const CAMPAIGN_DELAY_MIN = 120_000;  // 2 minutes
+export const CAMPAIGN_DELAY_MAX = 300_000;  // 5 minutes
 
-/** Delay before welcome message send — randomized */
-export const WELCOME_DELAY_MIN = 5_000;   // 5 seconds
-export const WELCOME_DELAY_MAX = 15_000;  // 15 seconds
+/** Delay before welcome batch message send — randomized */
+export const WELCOME_DELAY_MIN = 60_000;   // 1 minute
+export const WELCOME_DELAY_MAX = 120_000;  // 2 minutes
 
 // ---------------------------------------------------------------------------
 // Daily message counter — resets at midnight UTC
 // ---------------------------------------------------------------------------
 
 /** Maximum messages per day (campaigns + welcome combined) */
-const MAX_MESSAGES_PER_DAY = parseInt(process.env.MAX_MESSAGES_PER_DAY || '200', 10);
+const MAX_MESSAGES_PER_DAY = parseInt(process.env.MAX_MESSAGES_PER_DAY || '50', 10);
 
 let dailySentCount = 0;
 let dailyDate = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"

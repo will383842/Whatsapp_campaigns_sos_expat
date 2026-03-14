@@ -21,6 +21,9 @@ const laravelClient = axios.create({
  * Register the group-participants.update listener on the socket.
  * Call this after each successful connection.
  *
+ * NEW APPROACH: Only save members to DB. Welcome messages are sent
+ * in daily batches by Laravel cron (1 message per group per day).
+ *
  * @param {import('@whiskeysockets/baileys').WASocket} sock
  */
 export function registerWelcomeListener(sock) {
@@ -31,46 +34,30 @@ export function registerWelcomeListener(sock) {
     // Handle "add" events (new members joining)
     if (event.action === 'add') {
       for (const participantJid of event.participants) {
-        // Each welcome message goes through the global send queue
-        // to prevent 50 concurrent sends when many members join at once
         const capturedJid = participantJid;
-        const capturedGroupJid = groupJid;
         const capturedGroupWaId = groupWaId;
 
-        enqueueAsync(async () => {
+        try {
           const memberName = await getMemberName(sock, capturedJid);
           const memberPhone = capturedJid.replace('@s.whatsapp.net', '');
 
           log.info(
             { group: capturedGroupWaId, member: memberName, phone: memberPhone },
-            'New member joined group',
+            'New member joined group — saving to DB (batch welcome later)',
           );
 
-          // Ask Laravel — also saves member to DB
-          const { data } = await laravelClient.post('/api/welcome/check', {
+          // Save member to DB — no message sending
+          await laravelClient.post('/api/welcome/check', {
             group_wa_id: capturedGroupWaId,
             member_name: memberName,
             member_phone: memberPhone,
           });
-
-          if (!data.send) {
-            log.debug({ group: capturedGroupWaId, reason: data.reason }, 'Welcome skipped');
-            return;
-          }
-
-          // Small delay to look natural (2-5s before sending)
-          const delay = WELCOME_DELAY_MIN + Math.floor(Math.random() * (WELCOME_DELAY_MAX - WELCOME_DELAY_MIN));
-          await new Promise((r) => setTimeout(r, delay));
-
-          // Send the welcome message to the group (not DM)
-          if (isConnected()) {
-            await sock.sendMessage(capturedGroupJid, { text: data.message });
-            log.info(
-              { group: capturedGroupWaId, member: memberName },
-              'Welcome message sent',
-            );
-          }
-        }, `welcome:${capturedGroupWaId}:${capturedJid}`, 'high');
+        } catch (err) {
+          log.error(
+            { err: err.message, group: capturedGroupWaId, participant: capturedJid },
+            'Failed to save new member to DB',
+          );
+        }
       }
     }
 
@@ -96,7 +83,53 @@ export function registerWelcomeListener(sock) {
     }
   });
 
-  log.info('Welcome listener registered');
+  log.info('Welcome listener registered (batch mode — no immediate sends)');
+}
+
+/**
+ * Send a single welcome batch message to a group via the global queue.
+ * Called by Laravel daily cron via /send/welcome endpoint.
+ *
+ * @param {string} groupWaId - Raw group ID or full JID
+ * @param {string} content - Batch welcome message text
+ * @returns {Promise<{success: boolean, jid: string, error?: string}>}
+ */
+export async function sendWelcomeBatch(groupWaId, content) {
+  if (!isConnected()) {
+    const error = 'WhatsApp socket is not connected';
+    log.error({ groupWaId }, error);
+    return { success: false, jid: toGroupJid(groupWaId), error };
+  }
+
+  const sock = getSocket();
+  const jid = toGroupJid(groupWaId);
+
+  return new Promise((resolve) => {
+    enqueueAsync(async () => {
+      try {
+        await sock.sendMessage(jid, { text: content });
+        log.info({ groupWaId, jid }, 'Welcome batch message sent');
+        resolve({ success: true, jid });
+      } catch (err) {
+        const error = err?.message || String(err);
+        log.error({ groupWaId, jid, err: error }, 'Welcome batch message failed');
+        resolve({ success: false, jid, error });
+      }
+
+      // Delay between welcome batch sends
+      const delay = WELCOME_DELAY_MIN + Math.floor(Math.random() * (WELCOME_DELAY_MAX - WELCOME_DELAY_MIN));
+      await new Promise((r) => setTimeout(r, delay));
+    }, `welcome-batch:${groupWaId}`, 'normal', 'welcome');
+  });
+}
+
+/**
+ * Build the WhatsApp group JID from a raw group ID.
+ * @param {string} groupWaId
+ * @returns {string}
+ */
+function toGroupJid(groupWaId) {
+  return groupWaId.includes('@') ? groupWaId : `${groupWaId}@g.us`;
 }
 
 /**

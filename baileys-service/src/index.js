@@ -3,6 +3,7 @@ import express from 'express';
 import { connectToWhatsApp, getSocket, isConnected, getLastQr } from './whatsapp.js';
 import QRCode from 'qrcode';
 import { sendCampaignMessage, testSend } from './sender.js';
+import { sendWelcomeBatch } from './welcome.js';
 import { getQueueStats } from './sendQueue.js';
 import logger from './logger.js';
 
@@ -282,6 +283,178 @@ app.post('/send', requireApiKey, (req, res) => {
   sendCampaignMessage(payload).catch((err) => {
     logger.error({ err: err.message, message_id: payload.message_id }, 'Unhandled error in sendCampaignMessage');
   });
+});
+
+/**
+ * In-memory status for the lock-all operation.
+ * Long-running: ~3.5 min per group = ~4 hours for 68 groups.
+ */
+let lockAllStatus = null;
+
+/**
+ * POST /groups/lock-all
+ * Protected endpoint. Locks all groups so only admins can:
+ *   - edit group info (name, description, picture)
+ *   - add new members
+ *
+ * EXTREMELY SLOW on purpose (~3.5 min per group, ~4 hours total for 68 groups)
+ * to avoid any risk of WhatsApp blocking the account.
+ *
+ * After locking, retrieves the invite link for each group.
+ * Responds immediately. Check progress via GET /groups/lock-all/status.
+ */
+app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
+  if (!isConnected()) {
+    return res.status(503).json({ error: 'WhatsApp is not connected' });
+  }
+
+  if (lockAllStatus?.running) {
+    return res.json({ success: false, error: 'Lock-all already in progress', status: lockAllStatus });
+  }
+
+  const sock = getSocket();
+
+  let groups;
+  try {
+    const allGroups = await sock.groupFetchAllParticipating();
+    groups = Object.values(allGroups).filter(g => !g.isCommunity && !g.isCommunityAnnounce);
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch groups: ' + err.message });
+  }
+
+  lockAllStatus = {
+    running: true,
+    total: groups.length,
+    processed: 0,
+    locked: 0,
+    adminAdd: 0,
+    inviteLinks: [],
+    failed: [],
+    current: null,
+    startedAt: new Date().toISOString(),
+  };
+
+  // Respond immediately
+  res.json({
+    success: true,
+    message: `Lock-all started for ${groups.length} groups. ~3.5 min/group = ~${Math.round(groups.length * 3.5)} min total. Check /groups/lock-all/status for progress.`,
+    total: groups.length,
+    estimatedDuration: `~${Math.round(groups.length * 3.5 / 60)} hours`,
+  });
+
+  // Process in background — EXTREMELY SLOWLY
+  (async () => {
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
+      const jid = group.id;
+      const name = group.subject || jid;
+      const groupWaId = jid.replace('@g.us', '');
+      lockAllStatus.current = `[${i + 1}/${groups.length}] ${name}`;
+
+      // --- Step 1: Lock group settings (only admins edit info) ---
+      try {
+        await sock.groupSettingUpdate(jid, 'locked');
+        lockAllStatus.locked++;
+        logger.info({ jid, name, step: '1/3', progress: `${i + 1}/${groups.length}` }, 'Group settings locked');
+      } catch (err) {
+        logger.warn({ jid, name, err: err.message }, 'Failed to lock group settings');
+        lockAllStatus.failed.push({ groupWaId, name, action: 'lock', error: err.message });
+      }
+
+      // 45-75s delay before next operation
+      await new Promise(r => setTimeout(r, 45_000 + Math.floor(Math.random() * 30_000)));
+
+      // --- Step 2: Restrict member add to admins only ---
+      try {
+        await sock.groupMemberAddMode(jid, 'admin_add');
+        lockAllStatus.adminAdd++;
+        logger.info({ jid, name, step: '2/3', progress: `${i + 1}/${groups.length}` }, 'Member-add restricted to admins');
+      } catch (err) {
+        logger.warn({ jid, name, err: err.message }, 'Failed to set admin-add mode');
+        lockAllStatus.failed.push({ groupWaId, name, action: 'admin_add', error: err.message });
+      }
+
+      // 30-60s delay before getting invite link
+      await new Promise(r => setTimeout(r, 30_000 + Math.floor(Math.random() * 30_000)));
+
+      // --- Step 3: Retrieve the invite link ---
+      try {
+        const inviteCode = await sock.groupInviteCode(jid);
+        const inviteLink = inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : null;
+        lockAllStatus.inviteLinks.push({ groupWaId, name, inviteLink, language: group.desc || '' });
+        logger.info({ jid, name, inviteLink, step: '3/3' }, 'Invite link retrieved');
+      } catch (err) {
+        logger.warn({ jid, name, err: err.message }, 'Failed to get invite link');
+        lockAllStatus.inviteLinks.push({ groupWaId, name, inviteLink: null, error: err.message });
+      }
+
+      lockAllStatus.processed++;
+
+      // --- Long delay between groups: 60-120s ---
+      if (i < groups.length - 1) {
+        const groupDelay = 60_000 + Math.floor(Math.random() * 60_000);
+        const elapsed = Math.round((Date.now() - new Date(lockAllStatus.startedAt).getTime()) / 60_000);
+        const remaining = Math.round((groups.length - i - 1) * 3.5);
+        logger.info(
+          { delay: Math.round(groupDelay / 1000), elapsed: `${elapsed}min`, remaining: `~${remaining}min`, progress: `${i + 1}/${groups.length}` },
+          'Waiting before next group...',
+        );
+        await new Promise(r => setTimeout(r, groupDelay));
+      }
+    }
+
+    lockAllStatus.running = false;
+    lockAllStatus.current = null;
+    lockAllStatus.completedAt = new Date().toISOString();
+    logger.info({
+      total: lockAllStatus.total,
+      locked: lockAllStatus.locked,
+      adminAdd: lockAllStatus.adminAdd,
+      failedCount: lockAllStatus.failed.length,
+      linksRetrieved: lockAllStatus.inviteLinks.filter(l => l.inviteLink).length,
+    }, 'Lock-all operation completed');
+  })().catch(err => {
+    lockAllStatus.running = false;
+    lockAllStatus.error = err.message;
+    logger.error({ err: err.message }, 'Lock-all operation failed');
+  });
+});
+
+/**
+ * GET /groups/lock-all/status
+ * Protected endpoint. Returns the progress of the lock-all operation
+ * including all invite links once completed.
+ */
+app.get('/groups/lock-all/status', requireApiKey, (_req, res) => {
+  if (!lockAllStatus) {
+    return res.json({ started: false, message: 'No lock-all operation has been started.' });
+  }
+  return res.json(lockAllStatus);
+});
+
+/**
+ * POST /send/welcome
+ * Protected endpoint. Sends a batch welcome message to a single group.
+ * Called by Laravel daily cron. Goes through the global queue.
+ *
+ * Body: { group_wa_id, content }
+ */
+app.post('/send/welcome', requireApiKey, async (req, res) => {
+  const { group_wa_id, content } = req.body || {};
+
+  if (!group_wa_id || !content) {
+    return res.status(400).json({
+      error: 'Invalid payload: group_wa_id and content are required',
+    });
+  }
+
+  const result = await sendWelcomeBatch(group_wa_id, content);
+
+  if (result.success) {
+    return res.json({ success: true, jid: result.jid });
+  }
+
+  return res.status(500).json({ success: false, jid: result.jid, error: result.error });
 });
 
 /**
