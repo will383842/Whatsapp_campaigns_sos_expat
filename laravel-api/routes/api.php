@@ -81,7 +81,7 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         Route::post('/series/{id}/cancel', [SeriesController::class, 'cancel']);
         Route::post('/series/{id}/activate', [SeriesController::class, 'activate']);
         Route::post('/series/{id}/deactivate', [SeriesController::class, 'deactivate']);
-        Route::post('/series/{id}/test-send', [SeriesController::class, 'testSend']);
+        Route::post('/series/{id}/test-send', [SeriesController::class, 'testSend'])->middleware('throttle:10,1');
     });
 
     // --- Messages (read) ---

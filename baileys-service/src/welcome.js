@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getSocket, isConnected } from './whatsapp.js';
+import { enqueueAsync, WELCOME_DELAY_MIN, WELCOME_DELAY_MAX } from './sendQueue.js';
 import logger from './logger.js';
 
 const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8001';
@@ -30,45 +31,46 @@ export function registerWelcomeListener(sock) {
     // Handle "add" events (new members joining)
     if (event.action === 'add') {
       for (const participantJid of event.participants) {
-        try {
-          const memberName = await getMemberName(sock, participantJid);
-          const memberPhone = participantJid.replace('@s.whatsapp.net', '');
+        // Each welcome message goes through the global send queue
+        // to prevent 50 concurrent sends when many members join at once
+        const capturedJid = participantJid;
+        const capturedGroupJid = groupJid;
+        const capturedGroupWaId = groupWaId;
+
+        enqueueAsync(async () => {
+          const memberName = await getMemberName(sock, capturedJid);
+          const memberPhone = capturedJid.replace('@s.whatsapp.net', '');
 
           log.info(
-            { group: groupWaId, member: memberName, phone: memberPhone },
+            { group: capturedGroupWaId, member: memberName, phone: memberPhone },
             'New member joined group',
           );
 
           // Ask Laravel — also saves member to DB
           const { data } = await laravelClient.post('/api/welcome/check', {
-            group_wa_id: groupWaId,
+            group_wa_id: capturedGroupWaId,
             member_name: memberName,
             member_phone: memberPhone,
           });
 
           if (!data.send) {
-            log.debug({ group: groupWaId, reason: data.reason }, 'Welcome skipped');
-            continue;
+            log.debug({ group: capturedGroupWaId, reason: data.reason }, 'Welcome skipped');
+            return;
           }
 
-          // Small delay to look natural (2-5s after joining)
-          const delay = 2000 + Math.floor(Math.random() * 3000);
+          // Small delay to look natural (2-5s before sending)
+          const delay = WELCOME_DELAY_MIN + Math.floor(Math.random() * (WELCOME_DELAY_MAX - WELCOME_DELAY_MIN));
           await new Promise((r) => setTimeout(r, delay));
 
           // Send the welcome message to the group (not DM)
           if (isConnected()) {
-            await sock.sendMessage(groupJid, { text: data.message });
+            await sock.sendMessage(capturedGroupJid, { text: data.message });
             log.info(
-              { group: groupWaId, member: memberName },
+              { group: capturedGroupWaId, member: memberName },
               'Welcome message sent',
             );
           }
-        } catch (err) {
-          log.error(
-            { err: err.message, group: groupWaId, participant: participantJid },
-            'Failed to process new member',
-          );
-        }
+        }, `welcome:${capturedGroupWaId}:${capturedJid}`, 'high');
       }
     }
 

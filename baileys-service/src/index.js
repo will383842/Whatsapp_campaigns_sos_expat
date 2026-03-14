@@ -3,6 +3,7 @@ import express from 'express';
 import { connectToWhatsApp, getSocket, isConnected, getLastQr } from './whatsapp.js';
 import QRCode from 'qrcode';
 import { sendCampaignMessage, testSend } from './sender.js';
+import { getQueueStats } from './sendQueue.js';
 import logger from './logger.js';
 
 const PORT = parseInt(process.env.PORT || '3002', 10);
@@ -106,11 +107,13 @@ app.get('/qr', async (_req, res) => {
 app.get('/health', (_req, res) => {
   const sock = getSocket();
   const connected = isConnected();
+  const queueStats = getQueueStats();
   const statusCode = connected ? 200 : 503;
   res.status(statusCode).json({
     status: connected ? 'ok' : 'disconnected',
     connected,
     phone: sock?.user?.id || null,
+    queue: queueStats,
   });
 });
 

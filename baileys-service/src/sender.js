@@ -1,14 +1,10 @@
 import axios from 'axios';
 import { getSocket, isConnected } from './whatsapp.js';
+import { enqueue, CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX } from './sendQueue.js';
 import logger from './logger.js';
 
 const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8001';
 const LARAVEL_API_KEY = process.env.LARAVEL_API_KEY || '';
-
-/** Minimum delay between messages in ms */
-const DELAY_MIN = 30_000;
-/** Maximum delay between messages in ms */
-const DELAY_MAX = 60_000;
 
 /**
  * Axios instance pre-configured with Laravel API base URL and auth header.
@@ -222,56 +218,53 @@ export async function sendCampaignMessage(payload) {
   for (let i = 0; i < shuffled.length; i++) {
     const { group_wa_id, language, content } = shuffled[i];
     const jid = toGroupJid(group_wa_id);
+    const groupIndex = i;
 
-    logger.info(
-      { message_id, group_wa_id, jid, language, index: i + 1, total: shuffled.length },
-      'Processing group target',
-    );
-
-    // --- Validate group ---
-    const valid = await isGroupValid(jid);
-    if (!valid) {
-      logger.warn({ message_id, group_wa_id, jid }, 'Skipping invalid group');
-      failed_count++;
-      await reportGroupResult({
-        message_id,
-        group_wa_id,
-        language,
-        content,
-        status: 'failed',
-        error_message: 'Group not found or not accessible',
-      });
-      // Still apply delay to avoid rapid-fire failures
-      if (i < shuffled.length - 1) {
-        const delay = randomInt(DELAY_MIN, DELAY_MAX);
-        logger.debug({ delay }, 'Waiting before next group (after failure)');
-        await sleep(delay);
-      }
-      continue;
-    }
-
-    // --- Send message ---
-    try {
-      await sendWithRetry(sock, jid, content);
-      sent_count++;
-      logger.info({ message_id, group_wa_id, jid }, 'Message sent successfully');
-      await reportGroupResult({ message_id, group_wa_id, language, content, status: 'sent' });
-    } catch (err) {
-      failed_count++;
-      const error_message = err?.message || String(err);
-      logger.error({ message_id, group_wa_id, jid, err: error_message }, 'Failed to send message to group');
-      await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message });
-    }
-
-    // --- Random delay before next group (skip after last) ---
-    if (i < shuffled.length - 1) {
-      const delay = randomInt(DELAY_MIN, DELAY_MAX);
+    // Each group send goes through the global queue to prevent
+    // interleaving with other campaigns or welcome messages
+    await enqueue(async () => {
       logger.info(
-        { delay, nextIndex: i + 2, total: shuffled.length },
-        `Waiting ${(delay / 1000).toFixed(1)}s before next group`,
+        { message_id, group_wa_id, jid, language, index: groupIndex + 1, total: shuffled.length },
+        'Processing group target',
+      );
+
+      // --- Validate group ---
+      const valid = await isGroupValid(jid);
+      if (!valid) {
+        logger.warn({ message_id, group_wa_id, jid }, 'Skipping invalid group');
+        failed_count++;
+        await reportGroupResult({
+          message_id,
+          group_wa_id,
+          language,
+          content,
+          status: 'failed',
+          error_message: 'Group not found or not accessible',
+        });
+        return;
+      }
+
+      // --- Send message ---
+      try {
+        await sendWithRetry(sock, jid, content);
+        sent_count++;
+        logger.info({ message_id, group_wa_id, jid }, 'Message sent successfully');
+        await reportGroupResult({ message_id, group_wa_id, language, content, status: 'sent' });
+      } catch (err) {
+        failed_count++;
+        const error_message = err?.message || String(err);
+        logger.error({ message_id, group_wa_id, jid, err: error_message }, 'Failed to send message to group');
+        await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message });
+      }
+
+      // --- Random delay after send (anti-spam) ---
+      const delay = randomInt(CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX);
+      logger.info(
+        { delay, index: groupIndex + 1, total: shuffled.length },
+        `Campaign delay: ${(delay / 1000).toFixed(1)}s`,
       );
       await sleep(delay);
-    }
+    }, `campaign:${message_id}:group:${group_wa_id}`, 'normal');
   }
 
   // --- Final report ---
