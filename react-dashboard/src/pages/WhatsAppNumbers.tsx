@@ -139,12 +139,12 @@ function NumberCard({
         : 'bg-gray-400'
 
   const statusLabel = isConnected
-    ? 'Connect\u00e9'
+    ? 'Connecté'
     : isPaused
       ? 'En pause'
       : isBanned
         ? 'Banni'
-        : 'D\u00e9connect\u00e9'
+        : 'Déconnecté'
 
   return (
     <div className={`p-5 rounded-2xl border shadow-sm ${statusColor}`}>
@@ -159,7 +159,7 @@ function NumberCard({
               <h3 className="font-semibold text-gray-900">{number.name}</h3>
               {number.is_default && (
                 <span className="flex items-center gap-1 text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-medium">
-                  <Star size={10} /> Par d\u00e9faut
+                  <Star size={10} /> Par défaut
                 </span>
               )}
             </div>
@@ -178,7 +178,7 @@ function NumberCard({
           <span>&#9200;</span>
           <span>
             <b>Warmup jour {number.warmup.day}/{number.warmup.endsDay}</b> — Limite : {number.warmup.limit} msgs/jour
-            (monte progressivement jusqu'{'\u00e0'} {number.daily_max})
+            (monte progressivement jusqu'à {number.daily_max})
           </span>
         </div>
       )}
@@ -188,8 +188,8 @@ function NumberCard({
         <div className="flex items-center gap-2 text-xs mb-2 p-2 bg-red-100 border border-red-300 rounded-lg text-red-800">
           <span>&#128683;</span>
           <span>
-            <b>Num{'\u00e9'}ro banni par WhatsApp</b> ({number.ban_count} ban{number.ban_count > 1 ? 's' : ''}).
-            Attendez 24-48h avant de r{'\u00e9'}essayer. Red{'\u00e9'}marrez manuellement pour retenter.
+            <b>Numéro banni par WhatsApp</b> ({number.ban_count} ban{number.ban_count > 1 ? 's' : ''}).
+            Attendez 24-48h avant de réessayer. Redémarrez manuellement pour retenter.
           </span>
         </div>
       )}
@@ -215,7 +215,7 @@ function NumberCard({
             onClick={() => updateMutation.mutate(
               { id: number.id, data: { is_rotation_enabled: !number.is_rotation_enabled } },
               {
-                onSuccess: () => onSuccess(`Rotation ${number.is_rotation_enabled ? 'd\u00e9sactiv\u00e9e' : 'activ\u00e9e'} pour ${number.name}`),
+                onSuccess: () => onSuccess(`Rotation ${number.is_rotation_enabled ? 'désactivée' : 'activée'} pour ${number.name}`),
                 onError: () => onError('Erreur lors de la modification de la rotation'),
               },
             )}
@@ -254,8 +254,8 @@ function NumberCard({
                     updateMutation.mutate(
                       { id: number.id, data: { daily_max: quotaValue } },
                       {
-                        onSuccess: () => { onSuccess(`Quota mis \u00e0 jour : ${quotaValue}/jour`); setEditingQuota(false) },
-                        onError: () => onError('Erreur lors de la mise \u00e0 jour du quota'),
+                        onSuccess: () => { onSuccess(`Quota mis à jour : ${quotaValue}/jour`); setEditingQuota(false) },
+                        onError: () => onError('Erreur lors de la mise à jour du quota'),
                       },
                     )
                   }}
@@ -321,8 +321,8 @@ function NumberCard({
 
           <button
             onClick={() => restartMutation.mutate({ id: number.id, force: !isConnected }, {
-              onSuccess: () => onSuccess(`${number.name} red\u00e9marr\u00e9`),
-              onError: () => onError(`Erreur lors du red\u00e9marrage de ${number.name}`),
+              onSuccess: () => onSuccess(`${number.name} redémarré`),
+              onError: () => onError(`Erreur lors du redémarrage de ${number.name}`),
             })}
             disabled={restartMutation.isPending}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50"
@@ -334,14 +334,14 @@ function NumberCard({
           {!number.is_default && (
             <button
               onClick={() => setDefaultMutation.mutate(number.id, {
-                onSuccess: () => onSuccess(`${number.name} d\u00e9fini comme num\u00e9ro par d\u00e9faut`),
-                onError: () => onError('Erreur lors du changement de num\u00e9ro par d\u00e9faut'),
+                onSuccess: () => onSuccess(`${number.name} défini comme numéro par défaut`),
+                onError: () => onError('Erreur lors du changement de numéro par défaut'),
               })}
               disabled={setDefaultMutation.isPending}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
             >
               {setDefaultMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Star size={12} />}
-              Par d\u00e9faut
+              Par défaut
             </button>
           )}
 
@@ -350,7 +350,7 @@ function NumberCard({
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => deleteMutation.mutate(number.id, {
-                    onSuccess: () => { onSuccess(`${number.name} supprim\u00e9`); setConfirmDelete(false) },
+                    onSuccess: () => { onSuccess(`${number.name} supprimé`); setConfirmDelete(false) },
                     onError: () => { onError('Erreur lors de la suppression'); setConfirmDelete(false) },
                   })}
                   disabled={deleteMutation.isPending}
@@ -401,7 +401,7 @@ function AddNumberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
       { name, phone, slug: slug || undefined, daily_max: dailyMax },
       {
         onSuccess: (data) => {
-          onSuccess(`Num\u00e9ro "${name}" ajout\u00e9`)
+          onSuccess(`Numéro "${name}" ajouté`)
           setCreatedQr(data.qr)
           setCreatedId(data.number.id)
         },
@@ -422,7 +422,7 @@ function AddNumberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
         <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 text-center">
           <h3 className="text-lg font-semibold text-gray-900 mb-2">Scanner le QR code</h3>
           <p className="text-sm text-gray-500 mb-4">
-            Ouvrez WhatsApp sur le t\u00e9l\u00e9phone {name} &rarr; Appareils connect\u00e9s &rarr; Scanner
+            Ouvrez WhatsApp sur le téléphone {name} &rarr; Appareils connectés &rarr; Scanner
           </p>
           <div className="flex justify-center p-4 bg-gray-50 rounded-xl mb-4">
             {currentQr ? (
@@ -450,7 +450,7 @@ function AddNumberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Ajouter un num\u00e9ro</h3>
+          <h3 className="text-lg font-semibold text-gray-900">Ajouter un numéro</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <X size={20} />
           </button>
@@ -470,7 +470,7 @@ function AddNumberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">T\u00e9l\u00e9phone (sans +)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Téléphone (sans +)</label>
             <input
               type="text"
               value={phone}
@@ -487,7 +487,7 @@ function AddNumberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
               type="text"
               value={slug}
               onChange={(e) => setSlug(e.target.value.replace(/[^a-z0-9-]/g, ''))}
-              placeholder="sim-3 (auto-g\u00e9n\u00e9r\u00e9 si vide)"
+              placeholder="sim-3 (auto-généré si vide)"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 focus:border-transparent"
             />
           </div>
@@ -507,7 +507,7 @@ function AddNumberModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
           {createMutation.isError && (
             <div className="flex items-center gap-2 p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
               <AlertTriangle size={12} />
-              <span>Erreur lors de la cr\u00e9ation. V\u00e9rifiez que le num\u00e9ro n'existe pas d\u00e9j\u00e0.</span>
+              <span>Erreur lors de la création. Vérifiez que le numéro n'existe pas déjà.</span>
             </div>
           )}
 
@@ -555,7 +555,7 @@ export default function WhatsAppNumbers() {
       <div className="p-6">
         <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
           <AlertTriangle size={18} />
-          <span>Erreur lors du chargement des num\u00e9ros WhatsApp.</span>
+          <span>Erreur lors du chargement des numéros WhatsApp.</span>
         </div>
       </div>
     )
@@ -577,9 +577,9 @@ export default function WhatsAppNumbers() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Num{'\u00e9'}ros WhatsApp</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Numéros WhatsApp</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Gestion des num{'\u00e9'}ros et rotation d'envoi
+            Gestion des numéros et rotation d'envoi
           </p>
         </div>
         {isAdmin && (
@@ -600,13 +600,13 @@ export default function WhatsAppNumbers() {
             {connectedCount > 0 ? <Wifi size={16} className="text-green-500" /> : <WifiOff size={16} className="text-red-500" />}
             <span className="text-2xl font-bold text-gray-900">{connectedCount}/{totalCount}</span>
           </div>
-          <p className="text-xs text-gray-500">Connect{'\u00e9'}s</p>
+          <p className="text-xs text-gray-500">Connectés</p>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-4 text-center">
           <span className="text-2xl font-bold text-gray-900">{totalDailySent}/{totalEffectiveMax}</span>
-          <p className="text-xs text-gray-500">Envoy{'\u00e9'}s / Capacit{'\u00e9'} effective</p>
+          <p className="text-xs text-gray-500">Envoyés / Capacité effective</p>
           {totalEffectiveMax < totalDailyMax && (
-            <p className="text-xs text-blue-500 mt-0.5">({totalDailyMax} apr{'\u00e8'}s warmup)</p>
+            <p className="text-xs text-blue-500 mt-0.5">({totalDailyMax} après warmup)</p>
           )}
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-4 text-center">
@@ -625,17 +625,17 @@ export default function WhatsAppNumbers() {
         <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
           <div className="flex items-center gap-2 text-sm font-medium text-blue-700 mb-2">
             <span>&#9200;</span>
-            <span>{warmupNumbers.length} num{'\u00e9'}ro(s) en warmup</span>
+            <span>{warmupNumbers.length} numéro(s) en warmup</span>
           </div>
           <p className="text-xs text-blue-600 mb-2">
-            Les nouveaux num{'\u00e9'}ros montent progressivement en volume sur 4 semaines pour {'\u00e9'}viter les bans WhatsApp.
-            La capacit{'\u00e9'} totale augmentera automatiquement chaque jour.
+            Les nouveaux numéros montent progressivement en volume sur 4 semaines pour éviter les bans WhatsApp.
+            La capacité totale augmentera automatiquement chaque jour.
           </p>
           <div className="text-xs text-blue-500 space-y-0.5">
             {warmupNumbers.map(n => (
               <div key={n.id}>
                 {n.name} : jour {n.warmup?.day}/{n.warmup?.endsDay} — {n.warmup?.limit} msgs/jour
-                (plein r{'\u00e9'}gime : {n.daily_max}/jour)
+                (plein régime : {n.daily_max}/jour)
               </div>
             ))}
           </div>
@@ -647,10 +647,10 @@ export default function WhatsAppNumbers() {
         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
           <div className="flex items-center gap-2 text-sm font-medium text-red-700 mb-1">
             <span>&#128683;</span>
-            <span>{bannedCount} num{'\u00e9'}ro(s) banni(s)</span>
+            <span>{bannedCount} numéro(s) banni(s)</span>
           </div>
           <p className="text-xs text-red-600">
-            Ces num{'\u00e9'}ros sont automatiquement retir{'\u00e9'}s de la rotation. Attendez 24-48h puis red{'\u00e9'}marrez manuellement.
+            Ces numéros sont automatiquement retirés de la rotation. Attendez 24-48h puis redémarrez manuellement.
           </p>
         </div>
       )}
@@ -665,7 +665,7 @@ export default function WhatsAppNumbers() {
       {numbers?.length === 0 && (
         <div className="text-center py-16 text-gray-400">
           <Smartphone size={40} className="mx-auto mb-3 opacity-50" />
-          <p>Aucun num\u00e9ro configur\u00e9.</p>
+          <p>Aucun numéro configuré.</p>
           {isAdmin && <p className="text-sm mt-1">Cliquez sur &laquo; Ajouter &raquo; pour commencer.</p>}
         </div>
       )}

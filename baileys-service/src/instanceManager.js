@@ -82,6 +82,39 @@ let dailyDate = new Date().toISOString().slice(0, 10);
 /** Group → slug affinity map (persists for the day to avoid multi-number detection) */
 const groupAffinity = new Map();
 let affinityDate = new Date().toISOString().slice(0, 10);
+const AFFINITY_FILE = path.join(AUTH_BASE_DIR, '.group_affinity.json');
+
+/** Load group affinity from disk on boot (survives container restarts) */
+function loadAffinityFromDisk() {
+  try {
+    if (fs.existsSync(AFFINITY_FILE)) {
+      const data = JSON.parse(fs.readFileSync(AFFINITY_FILE, 'utf-8'));
+      if (data.date === affinityDate && data.entries) {
+        for (const [k, v] of Object.entries(data.entries)) {
+          groupAffinity.set(k, v);
+        }
+        log.info({ count: groupAffinity.size, date: data.date }, 'Loaded group affinity from disk');
+      } else {
+        log.info({ diskDate: data.date, today: affinityDate }, 'Affinity file from different day — starting fresh');
+      }
+    }
+  } catch (err) {
+    log.warn({ err: err.message }, 'Failed to load affinity from disk');
+  }
+}
+
+/** Persist group affinity to disk */
+function saveAffinityToDisk() {
+  try {
+    const data = { date: affinityDate, entries: Object.fromEntries(groupAffinity) };
+    fs.writeFileSync(AFFINITY_FILE, JSON.stringify(data), 'utf-8');
+  } catch (err) {
+    log.warn({ err: err.message }, 'Failed to save affinity to disk');
+  }
+}
+
+// Auto-save affinity every 2 minutes
+setInterval(saveAffinityToDisk, 120_000);
 
 // ---------------------------------------------------------------------------
 // Auth migration: move flat auth_info files into auth_info/default/
@@ -129,6 +162,7 @@ function resetDailyQuotasIfNeeded() {
   if (today !== affinityDate) {
     groupAffinity.clear();
     affinityDate = today;
+    saveAffinityToDisk();
   }
 }
 
@@ -744,6 +778,7 @@ export function isAnyConnected() {
 
 export async function initFromLaravel() {
   migrateAuthIfNeeded();
+  loadAffinityFromDisk();
 
   const maxRetries = 60; // 5 min
   for (let attempt = 1; attempt <= maxRetries; attempt++) {

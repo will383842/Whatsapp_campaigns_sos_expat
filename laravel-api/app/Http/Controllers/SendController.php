@@ -69,6 +69,19 @@ class SendController extends Controller
             'whatsapp_number_id' => $whatsappNumberId,
         ]);
 
+        // Auto-disable groups that are consistently unreachable
+        if ($logStatus === 'failed' && $logStatus !== 'quota_exceeded') {
+            $errorMsg = $validated['error_message'] ?? '';
+            $isGroupDead = str_contains($errorMsg, 'Group not found')
+                || str_contains($errorMsg, 'not accessible')
+                || str_contains($errorMsg, 'not-authorized');
+
+            if ($isGroupDead) {
+                $group->update(['is_active' => false]);
+                Log::warning("SendController: group #{$group->id} '{$group->name}' auto-disabled — {$errorMsg}");
+            }
+        }
+
         return response()->json(['message' => 'Report received.'], 201);
     }
 

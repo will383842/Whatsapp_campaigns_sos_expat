@@ -4,7 +4,7 @@ import { useAuthContext } from '../contexts/AuthContext'
 import { useWhatsAppStatus } from '../hooks/useSeries'
 
 const navItems = [
-  { to: '/series', label: 'S\u00e9ries', icon: List },
+  { to: '/series', label: 'Séries', icon: List },
   { to: '/groups', label: 'Groupes', icon: Users },
   { to: '/stats', label: 'Statistiques', icon: BarChart2 },
 ]
@@ -84,7 +84,7 @@ export default function Layout() {
               }
             >
               <Smartphone size={18} />
-              <span className="flex-1">Num\u00e9ros</span>
+              <span className="flex-1">Numéros</span>
             </NavLink>
           )}
         </nav>
@@ -104,7 +104,7 @@ export default function Layout() {
             </div>
             <button
               onClick={handleLogout}
-              title="Se d\u00e9connecter"
+              title="Se déconnecter"
               className="ml-2 p-2 rounded-lg text-gray-400 hover:bg-gray-800 hover:text-white transition-colors"
             >
               <LogOut size={16} />
