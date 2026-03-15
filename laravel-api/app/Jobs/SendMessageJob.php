@@ -157,7 +157,8 @@ class SendMessageJob implements ShouldQueue
         // Resolve group collection
         $groups = match ($targetingMode) {
             'by_language' => $applyCategories(
-                Group::whereIn('language', $series->target_languages ?? [])
+                Group::with('whatsappNumber')
+                    ->whereIn('language', $series->target_languages ?? [])
                     ->where('is_active', true)
             )->get(),
 
@@ -166,10 +167,11 @@ class SendMessageJob implements ShouldQueue
             ),
 
             'hybrid' => $applyCategories(
-                Group::where(function ($q) use ($series) {
-                    $q->whereIn('language', $series->target_languages ?? [])
-                      ->orWhereIn('id', $series->seriesTargets->pluck('group_id'));
-                })->where('is_active', true)->distinct()
+                Group::with('whatsappNumber')
+                    ->where(function ($q) use ($series) {
+                        $q->whereIn('language', $series->target_languages ?? [])
+                          ->orWhereIn('id', $series->seriesTargets->pluck('group_id'));
+                    })->where('is_active', true)->distinct()
             )->get(),
 
             default => collect(),
