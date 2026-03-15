@@ -139,7 +139,7 @@ export default function SeriesCard({ series }: Props) {
         {isAdmin && (
           <>
             <button
-              onClick={() => navigate(`/series/${series.id}?edit=1`)}
+              onClick={() => navigate(`/series/${series.id}`)}
               className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 px-2.5 py-1.5 rounded-lg hover:bg-blue-50 transition-colors"
             >
               <Pencil size={12} />

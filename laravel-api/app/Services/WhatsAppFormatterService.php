@@ -97,8 +97,10 @@ class WhatsAppFormatterService
             ($codepoint >= 0x1FA00 && $codepoint <= 0x1FA9F) ||
             // Dingbats
             ($codepoint >= 0x2702 && $codepoint <= 0x27B0) ||
-            // Enclosed characters
-            ($codepoint >= 0x24C2 && $codepoint <= 0x1F251) ||
+            // Enclosed Alphanumerics
+            ($codepoint >= 0x24C2 && $codepoint <= 0x24FF) ||
+            // Enclosed Alphanumeric Supplement
+            ($codepoint >= 0x1F100 && $codepoint <= 0x1F251) ||
             // Regional indicator symbols (flags)
             ($codepoint >= 0x1F1E0 && $codepoint <= 0x1F1FF) ||
             // Miscellaneous Symbols

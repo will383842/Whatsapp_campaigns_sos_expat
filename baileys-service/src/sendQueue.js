@@ -48,14 +48,9 @@ export function enqueue(fn, label = 'unknown', priority = 'normal', type = 'camp
 
   return new Promise((resolve, reject) => {
     const job = {
-      fn: async () => {
-        try {
-          await fn();
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      },
+      fn,
+      resolve,
+      reject,
       label,
       priority: priorityNum,
       type,
@@ -105,9 +100,11 @@ async function processQueue() {
     if (job.type === 'campaign' && !canSendGlobally()) {
       log.warn(
         { label: job.label },
-        'All instances at daily limit — campaign send SKIPPED',
+        'All instances at daily limit — campaign job SKIPPED (not executed)',
       );
-      try { await job.fn(); } catch { /* ignore */ }
+      // Resolve without executing — sender.js will detect canSendGlobally()=false
+      // and handle remaining groups as quota_exceeded
+      job.resolve();
       continue;
     }
 
@@ -118,8 +115,10 @@ async function processQueue() {
 
     try {
       await job.fn();
+      job.resolve();
     } catch (err) {
       log.error({ label: job.label, err: err.message }, 'Job execution error');
+      job.reject(err);
     }
 
     // Conservative gap between any two sends
