@@ -158,8 +158,8 @@ function NumberCard({
             <div className="flex items-center gap-2">
               <h3 className="font-semibold text-gray-900">{number.name}</h3>
               {number.is_default && (
-                <span className="flex items-center gap-1 text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-medium">
-                  <Star size={10} /> Par défaut
+                <span className="flex items-center gap-1 text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-medium" title="Utilisé pour les messages de bienvenue automatiques">
+                  <Star size={10} /> Par défaut*
                 </span>
               )}
             </div>
@@ -668,6 +668,13 @@ export default function WhatsAppNumbers() {
           <p>Aucun numéro configuré.</p>
           {isAdmin && <p className="text-sm mt-1">Cliquez sur &laquo; Ajouter &raquo; pour commencer.</p>}
         </div>
+      )}
+
+      {/* Footnote */}
+      {(numbers?.length ?? 0) > 0 && (
+        <p className="text-xs text-gray-400 mt-4">
+          * <b>Par défaut</b> = numéro utilisé pour les messages de bienvenue automatiques. Les campagnes utilisent le numéro assigné à chaque groupe (page Groupes).
+        </p>
       )}
 
       {/* Add modal */}
