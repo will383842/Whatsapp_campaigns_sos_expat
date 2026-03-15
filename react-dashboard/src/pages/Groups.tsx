@@ -95,6 +95,7 @@ export default function Groups() {
 
   const activeCount = allGroups.filter((g) => g.is_active).length
   const welcomeCount = allGroups.filter((g) => g.welcome_enabled).length
+  const unassignedCount = allGroups.filter((g) => g.is_active && !g.whatsapp_number_id).length
 
   const handleToggleActive = (group: Group) => {
     updateMutation.mutate({ id: group.id, data: { is_active: !group.is_active } })
@@ -232,6 +233,22 @@ export default function Groups() {
           <option value="inactive">Inactifs</option>
         </select>
       </div>
+
+      {/* Anti-ban warning */}
+      {unassignedCount > 0 && (
+        <div className="mb-4 p-4 bg-orange-50 border border-orange-200 rounded-xl flex items-start gap-3">
+          <AlertTriangle size={18} className="text-orange-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-orange-700">
+              {unassignedCount} groupe(s) actif(s) sans numéro WhatsApp assigné
+            </p>
+            <p className="text-xs text-orange-600 mt-0.5">
+              Ces groupes utilisent le mode Auto (rotation entre numéros), ce qui augmente le risque de ban.
+              Assignez un numéro fixe via la colonne "Numéro" ci-dessous.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Groups by community */}
       {sections.length === 0 && (

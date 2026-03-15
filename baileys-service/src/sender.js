@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { isAnyConnected, pickNextInstance, getInstanceForGroup, incrementInstanceQuota, canSendGlobally, getRemainingGlobalQuota, getInstance } from './instanceManager.js';
+import { sendTelegramAlert } from './whatsapp.js';
 import { enqueue, CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX } from './sendQueue.js';
 import logger from './logger.js';
 
@@ -137,6 +138,12 @@ export async function sendCampaignMessage(payload) {
 
   if (!isAnyConnected()) {
     logger.error({ message_id }, 'Cannot send: no WhatsApp instance connected');
+    sendTelegramAlert(
+      `🔴 <b>CAMPAGNE BLOQUÉE — Aucun numéro connecté !</b>\n\n` +
+      `Message #${message_id} : ${targets.length} groupes ne peuvent pas être envoyés.\n` +
+      `→ Tous les numéros sont déconnectés ou bannis.\n\n` +
+      `<b>Action requise :</b> Connectez au moins un numéro depuis le dashboard.`,
+    );
     for (const target of targets) {
       await reportGroupResult({
         message_id,
@@ -189,7 +196,14 @@ export async function sendCampaignMessage(payload) {
 
     // Check quota before each group — report remaining as quota_exceeded for carry-over
     if (!canSendGlobally()) {
+      const remaining = shuffled.length - i;
       logger.warn({ message_id, group_wa_id, index: groupIndex + 1, total: shuffled.length }, 'All instances at limit mid-campaign — remaining deferred');
+      sendTelegramAlert(
+        `📊 <b>Quota journalier atteint mid-campagne</b>\n\n` +
+        `Campagne message #${message_id} : ${i}/${shuffled.length} groupes envoyés.\n` +
+        `→ <b>${remaining} groupes reportés au lendemain</b> (carry-over automatique).\n\n` +
+        `<i>Rien à faire — les groupes restants seront envoyés demain automatiquement.</i>`,
+      );
       for (let j = i; j < shuffled.length; j++) {
         quota_exceeded_count++;
         await reportGroupResult({
@@ -207,15 +221,27 @@ export async function sendCampaignMessage(payload) {
     await enqueue(async () => {
       // Use assigned instance (from group's whatsapp_number_id) or fall back to affinity
       let instance = null;
+      let usedFallback = false;
       if (preferredSlug) {
         instance = getInstance(preferredSlug);
         if (!instance?.connected || instance.status !== 'active') {
           logger.warn({ message_id, group_wa_id, preferredSlug }, 'Assigned instance unavailable — falling back to affinity');
           instance = null;
+          usedFallback = true;
         }
       }
       if (!instance) {
         instance = getInstanceForGroup(group_wa_id);
+      }
+
+      // ALERT: fallback triggered — a group is about to receive a message from a DIFFERENT number
+      if (usedFallback && instance) {
+        sendTelegramAlert(
+          `⚠️ <b>ANTI-BAN : Fallback déclenché !</b>\n\n` +
+          `Le groupe <b>${group_wa_id}</b> est assigné au numéro <b>${preferredSlug}</b> mais celui-ci est indisponible.\n` +
+          `→ Envoi via <b>${instance.slug}</b> à la place.\n\n` +
+          `<i>Risque : WhatsApp pourrait détecter un changement de numéro. Vérifiez le numéro ${preferredSlug}.</i>`,
+        );
       }
       if (!instance) {
         failed_count++;

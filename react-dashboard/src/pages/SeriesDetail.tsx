@@ -772,6 +772,36 @@ export default function SeriesDetail() {
         />
       </div>
 
+      {/* Anti-ban warnings */}
+      {(() => {
+        const unassigned = targetedGroups.filter((g) => !g.whatsapp_number_id)
+        if (unassigned.length > 0 && series.status !== 'draft') {
+          return (
+            <div className="mb-5 p-4 bg-orange-50 border border-orange-200 rounded-xl">
+              <div className="flex items-center gap-2 text-sm font-semibold text-orange-700 mb-1">
+                <AlertTriangle size={16} />
+                {unassigned.length} groupe(s) sans numéro WhatsApp assigné
+              </div>
+              <p className="text-xs text-orange-600">
+                Ces groupes utilisent le mode Auto (rotation) ce qui peut exposer à un risque de ban.
+                Assignez un numéro fixe à chaque groupe depuis la page Groupes.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {unassigned.slice(0, 5).map((g) => (
+                  <span key={g.id} className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded">
+                    {g.name}
+                  </span>
+                ))}
+                {unassigned.length > 5 && (
+                  <span className="text-xs text-orange-500">+{unassigned.length - 5} autres</span>
+                )}
+              </div>
+            </div>
+          )
+        }
+        return null
+      })()}
+
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-5 flex gap-0">
         {tabs.map(({ key, label, badge }) => (

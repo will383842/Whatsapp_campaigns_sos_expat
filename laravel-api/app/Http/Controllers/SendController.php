@@ -9,6 +9,7 @@ use App\Models\WhatsAppNumber;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
@@ -79,6 +80,16 @@ class SendController extends Controller
             if ($isGroupDead) {
                 $group->update(['is_active' => false]);
                 Log::warning("SendController: group #{$group->id} '{$group->name}' auto-disabled — {$errorMsg}");
+
+                // Telegram alert
+                $botToken = config('services.telegram.bot_token');
+                if ($botToken) {
+                    Http::post("https://api.telegram.org/bot{$botToken}/sendMessage", [
+                        'chat_id'    => '7560535072',
+                        'text'       => "🗑️ <b>Groupe auto-désactivé</b>\n\n<b>{$group->name}</b> (#{$group->id})\nRaison : {$errorMsg}\n\n<i>Ce groupe ne recevra plus de messages.</i>",
+                        'parse_mode' => 'HTML',
+                    ]);
+                }
             }
         }
 
