@@ -17,7 +17,6 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
-          script_stop: true
           script: |
             cd /opt/whatsapp-campaigns
 
