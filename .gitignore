@@ -29,3 +29,6 @@ laravel-api/storage/logs/*
 !laravel-api/storage/logs/.gitkeep
 laravel-api/bootstrap/cache/*
 !laravel-api/bootstrap/cache/.gitkeep
+
+# Production env (secrets managed on server, not in git)
+.env.production
