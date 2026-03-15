@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class WhatsAppNumber extends Model
 {
+    protected $table = 'whatsapp_numbers';
+
     protected $fillable = [
         'slug',
         'name',
