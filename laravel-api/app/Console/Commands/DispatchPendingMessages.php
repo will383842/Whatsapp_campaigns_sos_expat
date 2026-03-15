@@ -48,7 +48,7 @@ class DispatchPendingMessages extends Command
             // Get the NEXT pending message per series (lowest order_index)
             $candidates = CampaignMessage::where('status', 'pending')
                 ->where('scheduled_at', '<=', now())
-                ->whereHas('series', fn ($q) => $q->whereNotIn('status', ['draft']))
+                ->whereHas('series', fn ($q) => $q->whereIn('status', ['scheduled', 'active']))
                 ->when($busySeriesIds->isNotEmpty(), fn ($q) => $q->whereNotIn('series_id', $busySeriesIds))
                 ->orderBy('series_id')
                 ->orderBy('order_index')

@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\SendMessageJob;
 use App\Models\CampaignMessage;
 use App\Models\CampaignSeries;
 use App\Services\SchedulerService;
