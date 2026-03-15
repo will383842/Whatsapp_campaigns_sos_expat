@@ -84,6 +84,8 @@ const LANG_LABELS: Record<string, string> = {
   nl: 'Néerlandais',
   ar: 'Arabe',
   zh: 'Chinois',
+  hi: 'Hindi',
+  ru: 'Russe',
 }
 
 const DAY_MAP: Record<string, string> = {

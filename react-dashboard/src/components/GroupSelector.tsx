@@ -18,6 +18,8 @@ const LANG_FLAGS: Record<string, string> = {
   nl: '🇳🇱',
   ar: '🇸🇦',
   zh: '🇨🇳',
+  hi: '🇮🇳',
+  ru: '🇷🇺',
 }
 
 export default function GroupSelector({ selected, onChange, groups }: Props) {

@@ -108,7 +108,9 @@ class StatsController extends Controller
                             ->where('is_active', true)
                     )->count();
                 } elseif ($series->targeting_mode === 'by_group') {
-                    $groupsTotal = $series->seriesTargets()->count();
+                    $groupsTotal = Group::whereIn('id', $series->seriesTargets()->pluck('group_id'))
+                        ->where('is_active', true)
+                        ->count();
                 } else {
                     // hybrid
                     $groupsTotal = $applyCategories(

@@ -223,7 +223,7 @@ export async function connectToWhatsApp() {
       heartbeatInterval = setInterval(() => {
         if (!isConnected()) {
           logger.warn('Heartbeat: WhatsApp disconnected, attempting reconnect...');
-          connectToWhatsApp();
+          connectToWhatsApp().catch((err) => logger.error({ err: err.message }, 'Heartbeat reconnect failed'));
         }
       }, 60000);
     }

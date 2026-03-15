@@ -2,7 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
-import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil, Plus, X } from 'lucide-react'
+import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
 import SendReport from '../components/SendReport'
 import { useGroups } from '../hooks/useSeries'
@@ -553,7 +553,7 @@ export default function SeriesDetail() {
 
   // Compute targeted groups (respecting both language AND category filters)
   const matchesCategories = (g: typeof groups[0]) =>
-    !series.target_categories || series.target_categories.length === 0 || series.target_categories.includes(g.category as any)
+    !series.target_categories || series.target_categories.length === 0 || (g.category !== null && series.target_categories.includes(g.category))
 
   const targetedGroups = (() => {
     if (series.targeting_mode === 'by_language' && series.target_languages) {

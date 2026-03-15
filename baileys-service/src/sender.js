@@ -117,20 +117,33 @@ async function reportGroupResult({ message_id, group_wa_id, language, content, s
  * @param {number} [params.quota_exceeded_count]
  */
 async function reportCampaignComplete({ message_id, total, sent_count, failed_count, quota_exceeded_count = 0 }) {
-  try {
-    await laravelClient.post('/api/send/report/complete', {
-      message_id,
-      total,
-      sent_count,
-      failed_count,
-      quota_exceeded_count,
-    });
-    logger.info({ message_id, total, sent_count, failed_count }, 'Campaign complete reported to Laravel');
-  } catch (err) {
-    logger.error(
-      { message_id, err: err.message },
-      'Failed to report campaign completion to Laravel',
-    );
+  const maxRetries = 3;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await laravelClient.post('/api/send/report/complete', {
+        message_id,
+        total,
+        sent_count,
+        failed_count,
+        quota_exceeded_count,
+      });
+      logger.info({ message_id, total, sent_count, failed_count, quota_exceeded_count }, 'Campaign complete reported to Laravel');
+      return;
+    } catch (err) {
+      if (attempt < maxRetries - 1) {
+        const delay = 5000 * (attempt + 1);
+        logger.warn(
+          { message_id, attempt: attempt + 1, maxRetries, delay, err: err.message },
+          'Failed to report campaign completion, retrying...',
+        );
+        await sleep(delay);
+      } else {
+        logger.error(
+          { message_id, total, sent_count, failed_count, err: err.message },
+          'CRITICAL: Failed to report campaign completion after all retries — message may be stuck in sending',
+        );
+      }
+    }
   }
 }
 

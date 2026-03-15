@@ -36,7 +36,7 @@ const STATUS_CONFIG: Record<
 
 const LANG_FLAGS: Record<string, string> = {
   fr: '🇫🇷', en: '🇬🇧', de: '🇩🇪', pt: '🇧🇷', es: '🇪🇸',
-  it: '🇮🇹', nl: '🇳🇱', ar: '🇸🇦', zh: '🇨🇳',
+  it: '🇮🇹', nl: '🇳🇱', ar: '🇸🇦', zh: '🇨🇳', hi: '🇮🇳', ru: '🇷🇺',
 }
 
 function formatDate(dateStr: string | null) {

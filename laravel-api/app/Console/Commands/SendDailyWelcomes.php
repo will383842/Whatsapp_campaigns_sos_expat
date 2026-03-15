@@ -43,7 +43,9 @@ class SendDailyWelcomes extends Command
 
         // 1. Health check — skip if Baileys is disconnected
         try {
-            $health = $client->get("{$baileysUrl}/health");
+            $health = $client->get("{$baileysUrl}/health", [
+                'headers' => ['X-API-Key' => $baileysKey],
+            ]);
             $data = json_decode($health->getBody()->getContents(), true);
 
             if (! ($data['connected'] ?? false)) {

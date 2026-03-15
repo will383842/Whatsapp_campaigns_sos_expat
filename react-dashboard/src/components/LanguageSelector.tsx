@@ -16,6 +16,8 @@ const LANGUAGES: { code: string; label: string; flag: string }[] = [
   { code: 'nl', label: 'Néerlandais', flag: '🇳🇱' },
   { code: 'ar', label: 'Arabe', flag: '🇸🇦' },
   { code: 'zh', label: 'Chinois', flag: '🇨🇳' },
+  { code: 'hi', label: 'Hindi', flag: '🇮🇳' },
+  { code: 'ru', label: 'Russe', flag: '🇷🇺' },
 ]
 
 export default function LanguageSelector({ selected, onChange, groups }: Props) {

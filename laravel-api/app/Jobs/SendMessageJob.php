@@ -123,8 +123,8 @@ class SendMessageJob implements ShouldQueue
             return;
         }
 
-        // 4. If first message in series, mark series as active
-        if ($series->status === 'scheduled' && $message->order_index === 0) {
+        // 4. If series is still scheduled, mark as active (first message being sent)
+        if ($series->status === 'scheduled') {
             $series->update(['status' => 'active']);
         }
     }
@@ -161,7 +161,9 @@ class SendMessageJob implements ShouldQueue
                     ->where('is_active', true)
             )->get(),
 
-            'by_group' => $series->seriesTargets->map->group->filter(),
+            'by_group' => $series->seriesTargets->map->group->filter(
+                fn ($g) => $g && $g->is_active
+            ),
 
             'hybrid' => $applyCategories(
                 Group::where(function ($q) use ($series) {
