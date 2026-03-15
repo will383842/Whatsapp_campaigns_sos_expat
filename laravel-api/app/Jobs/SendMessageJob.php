@@ -49,9 +49,9 @@ class SendMessageJob implements ShouldQueue
     {
         /** @var CampaignMessage|null $message */
         $message = CampaignMessage::with([
-            'series.seriesTargets.group',
+            'series.seriesTargets.group.whatsappNumber',
             'translations',
-            'targets.group',
+            'targets.group.whatsappNumber',
         ])->find($this->messageId);
 
         if (! $message) {
@@ -205,11 +205,18 @@ class SendMessageJob implements ShouldQueue
                 $language = $group->language;
             }
 
-            $targets[] = [
+            $target = [
                 'group_wa_id' => $group->whatsapp_group_id,
                 'language'    => $language,
                 'content'     => $content,
             ];
+
+            // Include assigned instance slug so Baileys uses the correct number
+            if ($group->whatsappNumber) {
+                $target['instance_slug'] = $group->whatsappNumber->slug;
+            }
+
+            $targets[] = $target;
         }
 
         return $targets;

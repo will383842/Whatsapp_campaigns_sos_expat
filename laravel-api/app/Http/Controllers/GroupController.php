@@ -265,10 +265,33 @@ class GroupController extends Controller
             'continent' => 'sometimes|nullable|string|max:100',
             'welcome_enabled' => 'sometimes|boolean',
             'welcome_message' => 'sometimes|nullable|string|max:2000',
+            'whatsapp_number_id' => 'sometimes|nullable|integer|exists:whatsapp_numbers,id',
         ]);
 
         $group->update($validated);
 
         return response()->json($group);
+    }
+
+    /**
+     * Bulk-assign a WhatsApp number to multiple groups.
+     * POST /api/groups/assign-number
+     * Body: { whatsapp_number_id: 1|null, group_ids: [1, 2, 3] }
+     */
+    public function assignNumber(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'whatsapp_number_id' => 'nullable|integer|exists:whatsapp_numbers,id',
+            'group_ids'          => 'required|array|min:1',
+            'group_ids.*'        => 'integer|exists:groups,id',
+        ]);
+
+        $updated = Group::whereIn('id', $validated['group_ids'])
+            ->update(['whatsapp_number_id' => $validated['whatsapp_number_id']]);
+
+        return response()->json([
+            'message' => "{$updated} groupe(s) mis à jour.",
+            'updated' => $updated,
+        ]);
     }
 }

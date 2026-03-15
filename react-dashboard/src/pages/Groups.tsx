@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
-import { useGroups, useSyncGroups, useUpdateGroup, useGroupParticipants, useGroupMembers } from '../hooks/useSeries'
+import { useGroups, useSyncGroups, useUpdateGroup, useAssignNumber, useGroupParticipants, useGroupMembers } from '../hooks/useSeries'
+import { useWhatsAppNumbers } from '../hooks/useWhatsAppNumbers'
 import { useAuthContext } from '../contexts/AuthContext'
 import { RefreshCw, Search, Users, Loader2, AlertTriangle, Check, X, MessageCircle, Edit3, Eye, Shield } from 'lucide-react'
 import type { Group } from '../types/series'
@@ -30,6 +31,8 @@ export default function Groups() {
   const { data: groups, isLoading, error } = useGroups()
   const syncMutation = useSyncGroups()
   const updateMutation = useUpdateGroup()
+  const assignNumberMutation = useAssignNumber()
+  const { data: waNumbers } = useWhatsAppNumbers()
 
   const [search, setSearch] = useState('')
   const [filterLang, setFilterLang] = useState('all')
@@ -298,6 +301,9 @@ export default function Groups() {
                       <th className="text-center px-4 py-2 font-medium text-gray-500 text-xs uppercase tracking-wider w-40">Langue</th>
                       <th className="text-center px-4 py-2 font-medium text-gray-500 text-xs uppercase tracking-wider w-24">Actif</th>
                       {isAdmin && (
+                        <th className="text-center px-4 py-2 font-medium text-gray-500 text-xs uppercase tracking-wider w-36">Numéro</th>
+                      )}
+                      {isAdmin && (
                         <th className="text-center px-4 py-2 font-medium text-gray-500 text-xs uppercase tracking-wider w-32">Bienvenue</th>
                       )}
                     </tr>
@@ -358,6 +364,23 @@ export default function Groups() {
                             </span>
                           )}
                         </td>
+                        {isAdmin && (
+                          <td className="text-center px-4 py-2.5">
+                            <select
+                              value={group.whatsapp_number_id ?? ''}
+                              onChange={(e) => {
+                                const val = e.target.value ? Number(e.target.value) : null
+                                assignNumberMutation.mutate({ whatsapp_number_id: val, group_ids: [group.id] })
+                              }}
+                              className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                            >
+                              <option value="">Auto</option>
+                              {waNumbers?.map((n) => (
+                                <option key={n.id} value={n.id}>{n.name}</option>
+                              ))}
+                            </select>
+                          </td>
+                        )}
                         {isAdmin && (
                           <td className="text-center px-4 py-2.5">
                             <div className="flex items-center justify-center gap-1.5">

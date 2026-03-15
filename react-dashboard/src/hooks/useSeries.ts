@@ -234,6 +234,19 @@ export function useSyncGroups() {
 
 // ── Update group ──────────────────────────────────────────────────────────────
 
+export function useAssignNumber() {
+  const qc = useQueryClient()
+  return useMutation<{ updated: number }, Error, { whatsapp_number_id: number | null; group_ids: number[] }>({
+    mutationFn: async (data) => {
+      const res = await api.post('/api/groups/assign-number', data)
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['groups'] })
+    },
+  })
+}
+
 export function useUpdateGroup() {
   const qc = useQueryClient()
   return useMutation<Group, Error, { id: number; data: Partial<Group> }>({

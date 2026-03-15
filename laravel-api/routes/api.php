@@ -85,6 +85,7 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     Route::get('/groups/{id}/members', [GroupController::class, 'members']);
     Route::post('/groups/sync', [GroupController::class, 'sync'])->middleware('role:admin');
     Route::put('/groups/{id}', [GroupController::class, 'update'])->middleware('role:admin');
+    Route::post('/groups/assign-number', [GroupController::class, 'assignNumber'])->middleware('role:admin');
 
     // --- Campaign Series (read) ---
     Route::get('/series', [SeriesController::class, 'index']);

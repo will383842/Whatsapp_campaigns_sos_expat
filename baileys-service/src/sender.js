@@ -183,7 +183,7 @@ export async function sendCampaignMessage(payload) {
   let quota_exceeded_count = 0;
 
   for (let i = 0; i < shuffled.length; i++) {
-    const { group_wa_id, language, content } = shuffled[i];
+    const { group_wa_id, language, content, instance_slug: preferredSlug } = shuffled[i];
     const jid = toGroupJid(group_wa_id);
     const groupIndex = i;
 
@@ -205,8 +205,18 @@ export async function sendCampaignMessage(payload) {
     }
 
     await enqueue(async () => {
-      // Use group affinity: same group always uses same instance (anti-ban)
-      const instance = getInstanceForGroup(group_wa_id);
+      // Use assigned instance (from group's whatsapp_number_id) or fall back to affinity
+      let instance = null;
+      if (preferredSlug) {
+        instance = getInstance(preferredSlug);
+        if (!instance?.connected || instance.status !== 'active') {
+          logger.warn({ message_id, group_wa_id, preferredSlug }, 'Assigned instance unavailable — falling back to affinity');
+          instance = null;
+        }
+      }
+      if (!instance) {
+        instance = getInstanceForGroup(group_wa_id);
+      }
       if (!instance) {
         failed_count++;
         await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message: 'No available instance' });

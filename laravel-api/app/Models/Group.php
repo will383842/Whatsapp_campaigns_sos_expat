@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Group extends Model
@@ -13,6 +14,7 @@ class Group extends Model
         'community_name',
         'language',
         'category',
+        'whatsapp_number_id',
         'country',
         'continent',
         'member_count',
@@ -28,6 +30,11 @@ class Group extends Model
         'welcome_enabled' => 'boolean',
         'member_count' => 'integer',
     ];
+
+    public function whatsappNumber(): BelongsTo
+    {
+        return $this->belongsTo(WhatsAppNumber::class);
+    }
 
     public function seriesTargets(): HasMany
     {

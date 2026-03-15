@@ -20,6 +20,7 @@ export interface Group {
   community_name: string | null
   language: string
   category: GroupCategory | null
+  whatsapp_number_id: number | null
   country: string | null
   continent: string | null
   member_count: number
