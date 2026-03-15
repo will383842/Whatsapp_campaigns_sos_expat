@@ -9,6 +9,7 @@ import SeriesDetail from './pages/SeriesDetail'
 import Stats from './pages/Stats'
 import Groups from './pages/Groups'
 import WhatsAppStatus from './pages/WhatsAppStatus'
+import WhatsAppNumbers from './pages/WhatsAppNumbers'
 import { Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 
@@ -108,6 +109,9 @@ function AppRoutes() {
         <Route path="stats" element={<Stats />} />
         <Route path="groups" element={<Groups />} />
         <Route path="whatsapp" element={<WhatsAppStatus />} />
+        <Route path="whatsapp/numbers" element={
+          <AdminRoute><WhatsAppNumbers /></AdminRoute>
+        } />
       </Route>
 
       <Route path="*" element={<Navigate to="/series" replace />} />

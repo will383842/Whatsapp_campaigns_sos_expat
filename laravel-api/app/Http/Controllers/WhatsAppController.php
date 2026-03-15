@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use GuzzleHttp\Client;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 class WhatsAppController extends Controller
@@ -20,7 +21,7 @@ class WhatsAppController extends Controller
 
     /**
      * GET /api/whatsapp/status
-     * Returns WhatsApp connection health from Baileys service.
+     * Returns WhatsApp connection health from Baileys service (all instances).
      */
     public function status(): JsonResponse
     {
@@ -43,12 +44,19 @@ class WhatsAppController extends Controller
 
     /**
      * POST /api/whatsapp/restart
-     * Triggers a WhatsApp reconnection via Baileys service.
+     * Triggers a WhatsApp reconnection. Accepts optional instance_slug.
      */
-    public function restart(): JsonResponse
+    public function restart(Request $request): JsonResponse
     {
+        $instanceSlug = $request->input('instance_slug');
+        $force = $request->boolean('force', false);
+
         try {
             $response = $this->baileysClient()->post('/restart', [
+                'json'    => array_filter([
+                    'instance_slug' => $instanceSlug,
+                    'force'         => $force,
+                ]),
                 'timeout' => 30,
             ]);
             $data = json_decode($response->getBody()->getContents(), true);
@@ -66,7 +74,7 @@ class WhatsAppController extends Controller
 
     /**
      * GET /api/whatsapp/qr
-     * Returns QR code data URL for pairing (if disconnected).
+     * Returns QR code data URL for pairing (legacy — returns first available QR).
      */
     public function qr(): JsonResponse
     {

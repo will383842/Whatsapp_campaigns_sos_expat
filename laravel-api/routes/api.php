@@ -8,6 +8,7 @@ use App\Http\Controllers\SeriesController;
 use App\Http\Controllers\StatsController;
 use App\Http\Controllers\WelcomeController;
 use App\Http\Controllers\WhatsAppController;
+use App\Http\Controllers\WhatsAppNumberController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -40,6 +41,11 @@ Route::middleware('baileys.api.key')->group(function () {
     Route::get('/groups/wa-ids', [GroupController::class, 'waIds']);
     Route::get('/groups/firestore-links', [GroupController::class, 'firestoreLinks']);
     Route::post('/groups/update-invite-links', [GroupController::class, 'updateInviteLinks']);
+
+    // WhatsApp numbers — active list for Baileys boot
+    Route::get('/whatsapp-numbers/active', [WhatsAppNumberController::class, 'active']);
+    // WhatsApp numbers — ban report from Baileys
+    Route::patch('/whatsapp-numbers/report-ban', [WhatsAppNumberController::class, 'reportBan']);
 });
 
 /*
@@ -58,6 +64,19 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     Route::get('/whatsapp/status', [WhatsAppController::class, 'status']);
     Route::get('/whatsapp/qr', [WhatsAppController::class, 'qr']);
     Route::post('/whatsapp/restart', [WhatsAppController::class, 'restart'])->middleware('role:admin');
+
+    // --- WhatsApp Numbers Management ---
+    Route::get('/whatsapp-numbers', [WhatsAppNumberController::class, 'index']);
+    Route::middleware('role:admin')->group(function () {
+        Route::post('/whatsapp-numbers', [WhatsAppNumberController::class, 'store']);
+        Route::put('/whatsapp-numbers/{id}', [WhatsAppNumberController::class, 'update']);
+        Route::delete('/whatsapp-numbers/{id}', [WhatsAppNumberController::class, 'destroy']);
+        Route::post('/whatsapp-numbers/{id}/pause', [WhatsAppNumberController::class, 'pause']);
+        Route::post('/whatsapp-numbers/{id}/resume', [WhatsAppNumberController::class, 'resume']);
+        Route::post('/whatsapp-numbers/{id}/restart', [WhatsAppNumberController::class, 'restart']);
+        Route::get('/whatsapp-numbers/{id}/qr', [WhatsAppNumberController::class, 'qr']);
+        Route::post('/whatsapp-numbers/{id}/set-default', [WhatsAppNumberController::class, 'setDefault']);
+    });
 
     // --- Groups ---
     Route::get('/groups', [GroupController::class, 'index']);

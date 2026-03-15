@@ -1,11 +1,30 @@
 import 'dotenv/config';
 import express from 'express';
 import axios from 'axios';
-import { connectToWhatsApp, getSocket, isConnected, getLastQr, sendTelegramAlert } from './whatsapp.js';
 import QRCode from 'qrcode';
+import { sendTelegramAlert } from './whatsapp.js';
 import { sendCampaignMessage, testSend } from './sender.js';
 import { sendWelcomeBatch } from './welcome.js';
 import { getQueueStats } from './sendQueue.js';
+import {
+  initFromLaravel,
+  getAllInstances,
+  getInstance,
+  createInstance,
+  removeInstance,
+  removeInstanceAndPurge,
+  restartInstance,
+  pauseInstance,
+  resumeInstance,
+  getInstanceQr,
+  getInstanceHealth,
+  getGlobalHealth,
+  getDefaultInstance,
+  getSocketForSlug,
+  isAnyConnected,
+  pickNextInstance,
+  updateInstanceConfig,
+} from './instanceManager.js';
 import logger from './logger.js';
 
 const PORT = parseInt(process.env.PORT || '3002', 10);
@@ -14,9 +33,6 @@ const LARAVEL_API_KEY = process.env.LARAVEL_API_KEY || '';
 const FIREBASE_SYNC_URL = process.env.FIREBASE_SYNC_URL || '';
 const FIREBASE_SYNC_API_KEY = process.env.FIREBASE_SYNC_API_KEY || '';
 
-/**
- * Axios instance for calling Laravel API (internal network).
- */
 const laravelClient = axios.create({
   baseURL: LARAVEL_API_URL,
   timeout: 15_000,
@@ -34,116 +50,277 @@ const app = express();
 
 app.use(express.json());
 
-// Request logger
 app.use((req, _res, next) => {
   logger.info({ method: req.method, url: req.url, ip: req.ip }, 'Incoming request');
   next();
 });
 
 // ---------------------------------------------------------------------------
-// Auth middleware (validates X-API-Key header against env variable)
+// Auth middleware
 // ---------------------------------------------------------------------------
 
-/**
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @param {import('express').NextFunction} next
- */
 function requireApiKey(req, res, next) {
   const key = req.headers['x-api-key'];
-
   if (!LARAVEL_API_KEY) {
-    logger.error('LARAVEL_API_KEY is not configured — rejecting all authenticated requests');
+    logger.error('LARAVEL_API_KEY not configured');
     return res.status(500).json({ error: 'Service API key not configured' });
   }
-
   if (!key || key !== LARAVEL_API_KEY) {
-    logger.warn({ ip: req.ip, url: req.url }, 'Unauthorized request — invalid or missing X-API-Key');
+    logger.warn({ ip: req.ip, url: req.url }, 'Unauthorized request');
     return res.status(401).json({ error: 'Unauthorized' });
   }
-
   next();
 }
 
-// ---------------------------------------------------------------------------
-// Routes
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// INSTANCE MANAGEMENT ENDPOINTS
+// ===========================================================================
 
 /**
- * GET /qr
- * Public endpoint. Returns QR code as HTML page for easy scanning.
+ * GET /instances
+ * List all instances with status, phone, quota, connected.
  */
-app.get('/qr', async (_req, res) => {
-  if (isConnected()) {
+app.get('/instances', requireApiKey, (_req, res) => {
+  const health = getGlobalHealth();
+  return res.json(health);
+});
+
+/**
+ * POST /instances
+ * Create a new instance. Body: { slug, phone, dailyMax }
+ */
+app.post('/instances', requireApiKey, async (req, res) => {
+  const { slug, phone, dailyMax } = req.body || {};
+  if (!slug || !phone) {
+    return res.status(400).json({ error: 'slug and phone are required' });
+  }
+
+  try {
+    const instance = await createInstance(slug, phone, dailyMax || 50);
+    // Wait a bit for QR to generate
+    await new Promise(r => setTimeout(r, 3000));
+    const qr = await getInstanceQr(slug);
+    return res.json({
+      success: true,
+      instance: getInstanceHealth(slug),
+      qr,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /instances/:slug
+ * Remove an instance. ?purge=true to delete auth data.
+ */
+app.delete('/instances/:slug', requireApiKey, (req, res) => {
+  const { slug } = req.params;
+  const purge = req.query.purge === 'true';
+
+  if (purge) {
+    removeInstanceAndPurge(slug);
+  } else {
+    removeInstance(slug);
+  }
+
+  return res.json({ success: true, message: `Instance ${slug} removed${purge ? ' (auth purged)' : ''}` });
+});
+
+/**
+ * POST /instances/:slug/restart
+ * Restart an instance. Body: { force: true } for new QR.
+ */
+app.post('/instances/:slug/restart', requireApiKey, async (req, res) => {
+  const { slug } = req.params;
+  const force = req.body?.force === true;
+
+  try {
+    await restartInstance(slug, force);
+    await new Promise(r => setTimeout(r, 2000));
+    const qr = await getInstanceQr(slug);
+    return res.json({
+      success: true,
+      message: force ? 'Session reset — scan QR' : 'Reconnecting...',
+      instance: getInstanceHealth(slug),
+      qr,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PATCH /instances/:slug/config
+ * Update instance config (e.g. dailyMax). Body: { dailyMax: number }
+ */
+app.patch('/instances/:slug/config', requireApiKey, (req, res) => {
+  try {
+    updateInstanceConfig(req.params.slug, req.body);
+    return res.json({ success: true, instance: getInstanceHealth(req.params.slug) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /instances/:slug/pause
+ */
+app.post('/instances/:slug/pause', requireApiKey, (req, res) => {
+  try {
+    pauseInstance(req.params.slug);
+    return res.json({ success: true, instance: getInstanceHealth(req.params.slug) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /instances/:slug/resume
+ */
+app.post('/instances/:slug/resume', requireApiKey, (req, res) => {
+  try {
+    resumeInstance(req.params.slug);
+    return res.json({ success: true, instance: getInstanceHealth(req.params.slug) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /instances/:slug/qr
+ */
+app.get('/instances/:slug/qr', requireApiKey, async (req, res) => {
+  const qr = await getInstanceQr(req.params.slug);
+  const inst = getInstance(req.params.slug);
+  return res.json({
+    connected: inst?.connected || false,
+    qr,
+  });
+});
+
+/**
+ * GET /instances/:slug/health
+ */
+app.get('/instances/:slug/health', requireApiKey, (req, res) => {
+  const health = getInstanceHealth(req.params.slug);
+  if (!health) return res.status(404).json({ error: 'Instance not found' });
+  return res.json(health);
+});
+
+// ===========================================================================
+// LEGACY / EXISTING ENDPOINTS (updated for multi-instance)
+// ===========================================================================
+
+/**
+ * GET /qr — Public HTML page listing QR codes for all disconnected instances.
+ */
+app.get('/qr', requireApiKey, async (_req, res) => {
+  const allInstances = getAllInstances();
+  const disconnected = allInstances.filter(i => !i.connected && i.lastQr);
+  const allConnected = allInstances.every(i => i.connected);
+
+  if (allConnected && allInstances.length > 0) {
     return res.send(`
       <html><body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;background:#1a1a2e;">
         <div style="text-align:center;color:#4ade80;">
           <h1 style="font-size:3em;">&#10004;</h1>
-          <h2>WhatsApp connecté !</h2>
-          <p>L'appareil est déjà lié.</p>
+          <h2>Toutes les instances WhatsApp sont connectées !</h2>
+          <p>${allInstances.length} instance(s) active(s).</p>
         </div>
       </body></html>
     `);
   }
 
-  const qr = getLastQr();
-  if (!qr) {
+  if (disconnected.length === 0) {
     return res.send(`
       <html><head><meta http-equiv="refresh" content="3"></head>
       <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;background:#1a1a2e;">
         <div style="text-align:center;color:white;">
-          <h2>En attente du QR code...</h2>
+          <h2>En attente des QR codes...</h2>
           <p>La page se rafraîchit automatiquement.</p>
         </div>
       </body></html>
     `);
   }
 
-  try {
-    const qrImageUrl = await QRCode.toDataURL(qr, { width: 400, margin: 2 });
-    return res.send(`
-      <html><head><meta http-equiv="refresh" content="20"></head>
-      <body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;background:#1a1a2e;">
-        <div style="text-align:center;">
-          <h2 style="color:white;">Scanner ce QR code avec WhatsApp</h2>
-          <p style="color:#aaa;">Appareils connectés → Connecter un appareil → Scanner</p>
-          <img src="${qrImageUrl}" style="border-radius:12px;margin:20px 0;" />
-          <p style="color:#aaa;font-size:12px;">Le QR se renouvelle automatiquement. Page rafraîchie toutes les 20s.</p>
+  let qrHtml = '';
+  for (const inst of disconnected) {
+    try {
+      const qrImageUrl = await QRCode.toDataURL(inst.lastQr, { width: 300, margin: 2 });
+      qrHtml += `
+        <div style="text-align:center;margin:20px;padding:20px;background:#16213e;border-radius:12px;">
+          <h3 style="color:white;">${inst.slug} (${inst.phone})</h3>
+          <img src="${qrImageUrl}" style="border-radius:8px;margin:10px 0;" />
         </div>
-      </body></html>
-    `);
-  } catch (err) {
-    return res.status(500).send('Erreur génération QR: ' + err.message);
+      `;
+    } catch { /* skip */ }
   }
+
+  return res.send(`
+    <html><head><meta http-equiv="refresh" content="20"></head>
+    <body style="font-family:sans-serif;background:#1a1a2e;padding:20px;">
+      <h2 style="color:white;text-align:center;">Scanner les QR codes WhatsApp</h2>
+      <div style="display:flex;flex-wrap:wrap;justify-content:center;">
+        ${qrHtml}
+      </div>
+      <p style="color:#aaa;font-size:12px;text-align:center;">Page rafraîchie toutes les 20s.</p>
+    </body></html>
+  `);
 });
 
 /**
- * GET /health
- * Public endpoint. Returns WhatsApp connection status.
+ * GET /health — Global health with all instances.
  */
 app.get('/health', (_req, res) => {
-  const sock = getSocket();
-  const connected = isConnected();
+  const global = getGlobalHealth();
   const queueStats = getQueueStats();
-  const statusCode = connected ? 200 : 503;
-  res.status(statusCode).json({
+  const connected = global.connectedCount > 0;
+
+  // Include legacy fields for backward compat with Laravel WhatsAppController
+  const defaultInst = getDefaultInstance();
+  res.status(connected ? 200 : 503).json({
     status: connected ? 'ok' : 'disconnected',
     connected,
-    phone: sock?.user?.id || null,
+    phone: defaultInst?.socket?.user?.id || null,
     queue: queueStats,
+    instances: global,
   });
 });
 
 /**
- * GET /groups
- * Protected endpoint. Returns all WhatsApp groups the connected account participates in.
+ * GET /qr/data — QR code data URL for default instance (legacy compat).
  */
-app.get('/groups', requireApiKey, async (_req, res) => {
-  if (!isConnected()) {
-    return res.status(503).json({ error: 'WhatsApp is not connected' });
+app.get('/qr/data', requireApiKey, async (_req, res) => {
+  const defaultInst = getDefaultInstance();
+  if (defaultInst?.connected) {
+    return res.json({ connected: true, qr: null });
   }
 
-  const sock = getSocket();
+  // Find any instance with a QR
+  const allInst = getAllInstances();
+  const withQr = allInst.find(i => !i.connected && i.lastQr);
+  if (!withQr) {
+    return res.json({ connected: false, qr: null });
+  }
+
+  try {
+    const qrDataUrl = await QRCode.toDataURL(withQr.lastQr, { width: 400, margin: 2 });
+    return res.json({ connected: false, qr: qrDataUrl, slug: withQr.slug });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to generate QR: ' + err.message });
+  }
+});
+
+/**
+ * GET /groups — Uses default instance.
+ */
+app.get('/groups', requireApiKey, async (req, res) => {
+  const slug = req.query.instance_slug;
+  const sock = getSocketForSlug(slug);
+  if (!sock) {
+    return res.status(503).json({ error: 'WhatsApp is not connected' });
+  }
 
   try {
     const result = await sock.groupFetchAllParticipating();
@@ -157,7 +334,6 @@ app.get('/groups', requireApiKey, async (_req, res) => {
       is_community_announce: g.isCommunityAnnounce || false,
       linked_parent: g.linkedParent || null,
     }));
-
     logger.info({ count: groups.length }, 'Fetched WhatsApp groups');
     return res.json({ success: true, count: groups.length, groups });
   } catch (err) {
@@ -168,231 +344,168 @@ app.get('/groups', requireApiKey, async (_req, res) => {
 
 /**
  * GET /groups/:groupId/participants
- * Protected endpoint. Returns the participants of a specific group.
  */
 app.get('/groups/:groupId/participants', requireApiKey, async (req, res) => {
-  if (!isConnected()) {
+  const sock = getSocketForSlug(req.query.instance_slug);
+  if (!sock) {
     return res.status(503).json({ error: 'WhatsApp is not connected' });
   }
 
-  const sock = getSocket();
   const groupJid = req.params.groupId + '@g.us';
-
   try {
     const metadata = await sock.groupMetadata(groupJid);
     const participants = metadata.participants.map((p) => ({
       phone: p.id.replace('@s.whatsapp.net', ''),
-      admin: p.admin || null, // 'admin', 'superadmin', or null
+      admin: p.admin || null,
     }));
-
-    return res.json({
-      success: true,
-      group_name: metadata.subject,
-      count: participants.length,
-      participants,
-    });
+    return res.json({ success: true, group_name: metadata.subject, count: participants.length, participants });
   } catch (err) {
-    logger.error({ err: err.message, groupId: req.params.groupId }, 'Failed to fetch participants');
     return res.status(500).json({ error: 'Failed to fetch participants: ' + err.message });
   }
 });
 
 /**
- * POST /restart
- * Protected endpoint. Forces a reconnection to WhatsApp.
+ * POST /restart — Accepts optional instance_slug, otherwise restarts default.
  */
 app.post('/restart', requireApiKey, async (req, res) => {
-  const forceNewSession = req.body?.force === true || !isConnected();
-  logger.info({ forceNewSession }, 'Manual restart requested — disconnecting and reconnecting...');
+  const slug = req.body?.instance_slug;
+  const force = req.body?.force === true;
 
   try {
-    const currentSock = getSocket();
-    if (currentSock) {
-      currentSock.end(undefined);
-    }
-
-    // Small delay to let the socket fully close
-    await new Promise((r) => setTimeout(r, 2000));
-
-    // If force=true or disconnected, remove old auth to force fresh QR pairing
-    if (forceNewSession) {
-      const fs = await import('fs');
-      const path = await import('path');
-      const { fileURLToPath } = await import('url');
-      const __dirname = path.default.dirname(fileURLToPath(import.meta.url));
-      const authDir = path.default.join(__dirname, '..', 'auth_info');
-      if (fs.default.existsSync(authDir)) {
-        // Delete contents only (not the dir itself — it may be a Docker volume mount)
-        const files = fs.default.readdirSync(authDir);
-        for (const file of files) {
-          fs.default.rmSync(path.default.join(authDir, file), { force: true });
+    if (slug) {
+      await restartInstance(slug, force);
+    } else {
+      // Restart default instance
+      const def = getDefaultInstance();
+      if (def) {
+        await restartInstance(def.slug, force || !def.connected);
+      } else {
+        // No instances at all — try to restart all
+        for (const inst of getAllInstances()) {
+          await restartInstance(inst.slug, force);
         }
-        logger.info({ filesRemoved: files.length }, 'Cleared auth_info/ for fresh QR pairing');
       }
     }
 
-    await connectToWhatsApp();
+    await new Promise(r => setTimeout(r, 2000));
 
     return res.json({
       success: true,
-      message: forceNewSession
-        ? 'Session réinitialisée — scannez le QR code pour vous reconnecter.'
-        : 'Reconnexion lancée.',
-      connected: isConnected(),
+      message: force ? 'Session reset — scan QR' : 'Reconnexion lancée.',
+      connected: isAnyConnected(),
     });
   } catch (err) {
     logger.error({ err: err.message }, 'Restart failed');
-    return res.json({
-      success: true,
-      message: 'Reconnexion lancée (peut prendre quelques instants)',
+    return res.status(500).json({
+      success: false,
+      message: `Erreur de reconnexion : ${err.message}`,
       connected: false,
     });
   }
 });
 
 /**
- * GET /qr/data
- * Protected endpoint. Returns QR code as base64 data URL (for embedding in dashboard).
- */
-app.get('/qr/data', requireApiKey, async (_req, res) => {
-  if (isConnected()) {
-    return res.json({ connected: true, qr: null });
-  }
-
-  const qr = getLastQr();
-  if (!qr) {
-    return res.json({ connected: false, qr: null });
-  }
-
-  try {
-    const qrDataUrl = await QRCode.toDataURL(qr, { width: 400, margin: 2 });
-    return res.json({ connected: false, qr: qrDataUrl });
-  } catch (err) {
-    return res.status(500).json({ error: 'Failed to generate QR: ' + err.message });
-  }
-});
-
-/**
- * POST /send
- * Protected endpoint. Enqueues a campaign send job and responds immediately.
- *
- * Body: { message_id, targets: [{ group_wa_id, language, content }] }
+ * POST /send — Campaign send (uses rotation via pickNextInstance in sender.js).
  */
 app.post('/send', requireApiKey, (req, res) => {
   const payload = req.body;
-
   if (!payload?.message_id || !Array.isArray(payload?.targets)) {
-    return res.status(400).json({
-      error: 'Invalid payload: message_id and targets[] are required',
-    });
+    return res.status(400).json({ error: 'Invalid payload: message_id and targets[] are required' });
   }
 
   logger.info(
     { message_id: payload.message_id, targetCount: payload.targets.length },
-    'Campaign send request received — processing asynchronously',
+    'Campaign send request received',
   );
 
-  // Respond immediately so Laravel does not time out
   res.json({ queued: true, message_id: payload.message_id });
 
-  // Process the campaign asynchronously (fire-and-forget)
   sendCampaignMessage(payload).catch((err) => {
     logger.error({ err: err.message, message_id: payload.message_id }, 'Unhandled error in sendCampaignMessage');
   });
 });
 
 /**
- * Sync invite links to Firestore via the Firebase Cloud Function.
- * Called after lock-all completes. First fetches the full list from Laravel
- * (which has firestore_group_id mappings) and sends to Firebase.
- *
- * @param {Array<{groupWaId: string, name: string, inviteLink: string|null}>} rawLinks
+ * POST /send/welcome — Uses rotation.
  */
+app.post('/send/welcome', requireApiKey, async (req, res) => {
+  const { group_wa_id, content } = req.body || {};
+  if (!group_wa_id || !content) {
+    return res.status(400).json({ error: 'group_wa_id and content are required' });
+  }
+
+  const result = await sendWelcomeBatch(group_wa_id, content);
+  if (result.success) {
+    return res.json({ success: true, jid: result.jid, instance_slug: result.instance_slug });
+  }
+  return res.status(500).json({ success: false, jid: result.jid, error: result.error });
+});
+
+/**
+ * POST /send/test — Accepts optional instance_slug.
+ */
+app.post('/send/test', requireApiKey, async (req, res) => {
+  const { group_wa_id, content, instance_slug } = req.body || {};
+  if (!group_wa_id || !content) {
+    return res.status(400).json({ error: 'group_wa_id and content are required' });
+  }
+
+  const result = await testSend(group_wa_id, content, instance_slug);
+  if (result.success) {
+    return res.json({ success: true, jid: result.jid, instance_slug: result.instance_slug });
+  }
+  return res.status(500).json({ success: false, jid: result.jid, error: result.error });
+});
+
+// ===========================================================================
+// LOCK-ALL & ADD-ADMIN (use specific instance or default)
+// ===========================================================================
+
 async function syncInviteLinksToFirestore(rawLinks) {
   if (!FIREBASE_SYNC_URL || !FIREBASE_SYNC_API_KEY) {
-    logger.warn('FIREBASE_SYNC_URL or FIREBASE_SYNC_API_KEY not configured — skipping Firestore sync');
+    logger.warn('FIREBASE_SYNC_URL not configured — skipping Firestore sync');
     sendTelegramAlert(
-      `⚠️ <b>Mise à jour auto des liens WhatsApp sur SOS-Expat non configurée</b>\n\n` +
-      `Les liens ont bien été sauvegardés dans notre base de données, mais la synchronisation ` +
-      `automatique vers le site SOS-Expat n'est pas encore configurée.\n\n` +
-      `💡 Contactez le support technique pour activer la sync automatique (FIREBASE_SYNC_URL).`
+      `⚠️ <b>Sync des liens WhatsApp non configurée</b>\n\n` +
+      `Les liens ont bien été sauvegardés en base, mais la sync vers SOS-Expat n'est pas configurée.`,
     );
     return;
   }
 
   try {
-    // Fetch groups with firestore_group_id from Laravel
     const resp = await laravelClient.get('/api/groups/firestore-links');
     const { links: firestoreLinks } = resp.data;
-
     if (!firestoreLinks || firestoreLinks.length === 0) {
-      logger.warn('No firestore-mapped groups found in Laravel — run "php artisan groups:map-firestore" first');
+      logger.warn('No firestore-mapped groups found');
       return;
     }
 
-    // Send to Firebase Cloud Function
-    const firebaseResp = await axios.post(FIREBASE_SYNC_URL, {
-      links: firestoreLinks,
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': FIREBASE_SYNC_API_KEY,
-      },
+    const firebaseResp = await axios.post(FIREBASE_SYNC_URL, { links: firestoreLinks }, {
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': FIREBASE_SYNC_API_KEY },
       timeout: 30_000,
     });
 
     const { updated, total, notFound } = firebaseResp.data;
-    logger.info({ updated, total }, 'Firestore invite links synced successfully');
+    logger.info({ updated, total }, 'Firestore invite links synced');
 
     if (updated > 0) {
       sendTelegramAlert(
-        `✅ <b>Liens d'invitation WhatsApp mis à jour sur SOS-Expat</b>\n\n` +
-        `${updated} lien(s) d'invitation mis à jour sur le site SOS-Expat.\n` +
-        `Les nouveaux inscrits recevront les liens corrects pour rejoindre les groupes WhatsApp.\n\n` +
-        (notFound?.length
-          ? `⚠️ ${notFound.length} groupe(s) n'ont pas pu être associés — vérifiez le mapping.`
-          : `✅ Tous les ${total} groupes sont à jour.`)
-      );
-    } else {
-      sendTelegramAlert(
-        `✅ <b>Vérification des liens WhatsApp — tout est OK</b>\n\n` +
-        `Les ${total} liens d'invitation WhatsApp sur SOS-Expat sont déjà à jour.\n` +
-        `Aucune modification nécessaire.`
+        `✅ <b>Liens WhatsApp mis à jour sur SOS-Expat</b>\n\n` +
+        `${updated} lien(s) mis à jour.\n` +
+        (notFound?.length ? `⚠️ ${notFound.length} groupe(s) non associés.` : `✅ Tous les ${total} groupes à jour.`),
       );
     }
   } catch (err) {
-    logger.error({ err: err.message }, 'Failed to sync invite links to Firestore — links are saved in Laravel DB, manual sync possible');
-
-    sendTelegramAlert(
-      `⚠️ <b>Mise à jour des liens WhatsApp sur SOS-Expat échouée</b>\n\n` +
-      `Les liens d'invitation n'ont pas pu être mis à jour automatiquement sur le site SOS-Expat.\n\n` +
-      `💡 Pas de panique : les liens sont sauvegardés dans notre base de données. ` +
-      `Les anciens liens sur SOS-Expat restent fonctionnels sauf s'ils ont été modifiés.\n\n` +
-      `Erreur technique : ${err.message}`
-    );
+    logger.error({ err: err.message }, 'Failed to sync invite links to Firestore');
+    sendTelegramAlert(`⚠️ <b>Sync des liens échouée</b>\n\nErreur : ${err.message}`);
   }
 }
 
-/**
- * In-memory status for the lock-all operation.
- * Long-running: ~3.5 min per group = ~4 hours for 68 groups.
- */
 let lockAllStatus = null;
 
-/**
- * POST /groups/lock-all
- * Protected endpoint. Locks ONLY groups registered in Laravel DB so only admins can:
- *   - edit group info (name, description, picture)
- *   - add new members
- *
- * EXTREMELY SLOW on purpose (~3.5 min per group, ~4 hours total for 68 groups)
- * to avoid any risk of WhatsApp blocking the account.
- *
- * After locking, retrieves invite links and saves them to Laravel DB.
- * Responds immediately. Check progress via GET /groups/lock-all/status.
- */
-app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
-  if (!isConnected()) {
+app.post('/groups/lock-all', requireApiKey, async (req, res) => {
+  const slug = req.body?.instance_slug;
+  const sock = getSocketForSlug(slug);
+  if (!sock) {
     return res.status(503).json({ error: 'WhatsApp is not connected' });
   }
 
@@ -400,23 +513,18 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
     return res.json({ success: false, error: 'Lock-all already in progress', status: lockAllStatus });
   }
 
-  const sock = getSocket();
-
-  // Step 0: Get the whitelist of group IDs from Laravel DB
   let allowedIds;
   try {
     const { data } = await laravelClient.get('/api/groups/wa-ids');
     allowedIds = new Set(data.ids || []);
-    logger.info({ count: allowedIds.size }, 'Fetched allowed group IDs from Laravel DB');
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch group IDs from Laravel: ' + err.message });
+    return res.status(500).json({ error: 'Failed to fetch group IDs: ' + err.message });
   }
 
   if (allowedIds.size === 0) {
     return res.json({ success: false, error: 'No groups found in Laravel DB' });
   }
 
-  // Fetch all WhatsApp groups and filter to only DB-registered ones
   let groups;
   try {
     const allGroups = await sock.groupFetchAllParticipating();
@@ -425,7 +533,7 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
       return allowedIds.has(waId) && !g.isCommunity && !g.isCommunityAnnounce;
     });
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch WhatsApp groups: ' + err.message });
+    return res.status(500).json({ error: 'Failed to fetch groups: ' + err.message });
   }
 
   lockAllStatus = {
@@ -441,15 +549,13 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
     startedAt: new Date().toISOString(),
   };
 
-  // Respond immediately
   res.json({
     success: true,
-    message: `Lock-all started for ${groups.length} groups (filtered from DB: ${allowedIds.size}). ~3.5 min/group = ~${Math.round(groups.length * 3.5)} min total.`,
+    message: `Lock-all started for ${groups.length} groups. ~3.5 min/group.`,
     total: groups.length,
     estimatedDuration: `~${Math.round(groups.length * 3.5 / 60)} hours`,
   });
 
-  // Process in background — EXTREMELY SLOWLY
   (async () => {
     for (let i = 0; i < groups.length; i++) {
       const group = groups[i];
@@ -458,205 +564,104 @@ app.post('/groups/lock-all', requireApiKey, async (_req, res) => {
       const groupWaId = jid.replace('@g.us', '');
       lockAllStatus.current = `[${i + 1}/${groups.length}] ${name}`;
 
-      // --- Step 1: Lock group settings (only admins edit info) ---
       try {
         await sock.groupSettingUpdate(jid, 'locked');
         lockAllStatus.locked++;
-        logger.info({ jid, name, step: '1/3', progress: `${i + 1}/${groups.length}` }, 'Group settings locked');
       } catch (err) {
-        logger.warn({ jid, name, err: err.message }, 'Failed to lock group settings');
         lockAllStatus.failed.push({ groupWaId, name, action: 'lock', error: err.message });
       }
 
-      // 45-75s delay before next operation
       await new Promise(r => setTimeout(r, 45_000 + Math.floor(Math.random() * 30_000)));
 
-      // --- Step 2: Restrict member add to admins only ---
       try {
         await sock.groupMemberAddMode(jid, 'admin_add');
         lockAllStatus.adminAdd++;
-        logger.info({ jid, name, step: '2/3', progress: `${i + 1}/${groups.length}` }, 'Member-add restricted to admins');
       } catch (err) {
-        logger.warn({ jid, name, err: err.message }, 'Failed to set admin-add mode');
         lockAllStatus.failed.push({ groupWaId, name, action: 'admin_add', error: err.message });
       }
 
-      // 30-60s delay before getting invite link
       await new Promise(r => setTimeout(r, 30_000 + Math.floor(Math.random() * 30_000)));
 
-      // --- Step 3: Retrieve the invite link ---
       let inviteLink = null;
       try {
         const inviteCode = await sock.groupInviteCode(jid);
         inviteLink = inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : null;
         lockAllStatus.inviteLinks.push({ groupWaId, name, inviteLink });
-        logger.info({ jid, name, inviteLink, step: '3/3' }, 'Invite link retrieved');
       } catch (err) {
-        logger.warn({ jid, name, err: err.message }, 'Failed to get invite link');
         lockAllStatus.inviteLinks.push({ groupWaId, name, inviteLink: null, error: err.message });
       }
 
-      // --- Step 4: Save invite link to Laravel DB immediately ---
       if (inviteLink) {
         try {
           await laravelClient.post('/api/groups/update-invite-links', {
             links: [{ whatsapp_group_id: groupWaId, invite_link: inviteLink }],
           });
-        } catch (err) {
-          logger.warn({ groupWaId, err: err.message }, 'Failed to save invite link to Laravel');
-        }
+        } catch { /* ignore */ }
       }
 
       lockAllStatus.processed++;
 
-      // --- Delay between groups: 20-40s (3x faster) ---
       if (i < groups.length - 1) {
-        const groupDelay = 20_000 + Math.floor(Math.random() * 20_000);
-        const elapsed = Math.round((Date.now() - new Date(lockAllStatus.startedAt).getTime()) / 60_000);
-        const remaining = Math.round((groups.length - i - 1) * 1.2);
-        logger.info(
-          { delay: Math.round(groupDelay / 1000), elapsed: `${elapsed}min`, remaining: `~${remaining}min`, progress: `${i + 1}/${groups.length}` },
-          'Waiting before next group...',
-        );
-        await new Promise(r => setTimeout(r, groupDelay));
+        await new Promise(r => setTimeout(r, 20_000 + Math.floor(Math.random() * 20_000)));
       }
     }
 
     lockAllStatus.running = false;
     lockAllStatus.current = null;
     lockAllStatus.completedAt = new Date().toISOString();
-
-    const linksOk = lockAllStatus.inviteLinks.filter(l => l.inviteLink).length;
-    const failedCount = lockAllStatus.failed.length;
-
-    logger.info({
-      total: lockAllStatus.total,
-      locked: lockAllStatus.locked,
-      adminAdd: lockAllStatus.adminAdd,
-      failedCount,
-      linksRetrieved: linksOk,
-    }, 'Lock-all operation completed');
-
-    // --- Telegram: report completion ---
-    const elapsed = Math.round((Date.now() - new Date(lockAllStatus.startedAt).getTime()) / 60_000);
-    const hours = Math.floor(elapsed / 60);
-    const mins = elapsed % 60;
-    const durationStr = hours > 0 ? `${hours}h${mins}min` : `${mins} minutes`;
-
-    if (failedCount === 0) {
-      sendTelegramAlert(
-        `✅ <b>Sécurisation des groupes WhatsApp terminée !</b>\n\n` +
-        `Tous les ${lockAllStatus.total} groupes WhatsApp SOS-Expat ont été sécurisés :\n` +
-        `• Seuls les admins peuvent ajouter des membres\n` +
-        `• Seuls les admins peuvent modifier les paramètres\n` +
-        `• ${linksOk} liens d'invitation ont été sauvegardés\n\n` +
-        `⏱ Durée totale : ${durationStr}\n\n` +
-        `📌 Les liens d'invitation restent fonctionnels — les nouveaux inscrits sur SOS-Expat pourront toujours rejoindre les groupes.\n\n` +
-        `Mise à jour des liens sur SOS-Expat en cours...`
-      );
-    } else {
-      sendTelegramAlert(
-        `⚠️ <b>Sécurisation des groupes WhatsApp terminée avec ${failedCount} erreur(s)</b>\n\n` +
-        `${lockAllStatus.locked} groupes sécurisés sur ${lockAllStatus.total}\n` +
-        `${linksOk} liens d'invitation sauvegardés\n` +
-        `${failedCount} groupe(s) en erreur — à vérifier manuellement\n\n` +
-        `⏱ Durée totale : ${durationStr}\n\n` +
-        `💡 Les groupes en erreur ne sont peut-être pas verrouillés. ` +
-        `Contactez le support technique pour vérifier.`
-      );
-    }
-
-    // --- Sync invite links to Firestore (SOS Expat) ---
     await syncInviteLinksToFirestore(lockAllStatus.inviteLinks);
   })().catch(err => {
     lockAllStatus.running = false;
     lockAllStatus.error = err.message;
-    logger.error({ err: err.message }, 'Lock-all operation failed');
-
-    // --- Telegram: report failure ---
-    sendTelegramAlert(
-      `🔴 <b>ERREUR — Sécurisation des groupes WhatsApp interrompue</b>\n\n` +
-      `Le processus de sécurisation des groupes a planté.\n` +
-      `${lockAllStatus?.processed || 0} groupes traités sur ${lockAllStatus?.total || '?'} avant l'erreur.\n\n` +
-      `❌ Erreur technique : ${err.message}\n\n` +
-      `💡 Les groupes déjà traités restent sécurisés. ` +
-      `Contactez le support technique pour relancer le processus sur les groupes restants.`
-    );
+    logger.error({ err: err.message }, 'Lock-all failed');
   });
 });
 
-/**
- * GET /groups/lock-all/status
- * Protected endpoint. Returns the progress of the lock-all operation
- * including all invite links once completed.
- */
 app.get('/groups/lock-all/status', requireApiKey, (_req, res) => {
-  if (!lockAllStatus) {
-    return res.json({ started: false, message: 'No lock-all operation has been started.' });
-  }
+  if (!lockAllStatus) return res.json({ started: false });
   return res.json(lockAllStatus);
 });
 
-/**
- * In-memory status for the add-admin operation.
- */
 let addAdminStatus = null;
 
-/**
- * POST /groups/add-admin
- * Protected endpoint. Adds a phone number to all DB-registered groups and promotes to admin.
- *
- * EXTREMELY SLOW: ~8 min per group (add + delay + promote + delay + long pause).
- * Spread over multiple days: processes max 12 groups per run (~1.5 hours).
- * Call multiple times on different days to complete all groups.
- *
- * Body: { phone: "33607870038" } (without + prefix)
- *
- * Responds immediately. Check progress via GET /groups/add-admin/status.
- */
 app.post('/groups/add-admin', requireApiKey, async (req, res) => {
-  if (!isConnected()) {
+  const slug = req.body?.instance_slug;
+  const sock = getSocketForSlug(slug);
+  if (!sock) {
     return res.status(503).json({ error: 'WhatsApp is not connected' });
   }
 
   if (addAdminStatus?.running) {
     return res.json({ success: false, error: 'Add-admin already in progress', status: addAdminStatus });
   }
-
-  // Don't run if lock-all is in progress
   if (lockAllStatus?.running) {
-    return res.json({ success: false, error: 'Cannot run while lock-all is in progress. Wait for it to complete.' });
+    return res.json({ success: false, error: 'Cannot run while lock-all is in progress' });
   }
 
   const { phone } = req.body || {};
   if (!phone) {
-    return res.status(400).json({ error: 'phone is required (e.g. "33607870038")' });
+    return res.status(400).json({ error: 'phone is required' });
   }
 
   const participantJid = phone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-  const sock = getSocket();
 
-  // Verify the number is on WhatsApp
   try {
     const [exists] = await sock.onWhatsApp(participantJid);
     if (!exists?.exists) {
       return res.json({ success: false, error: `+${phone} is not on WhatsApp` });
     }
-    logger.info({ phone, jid: exists.jid }, 'Phone verified on WhatsApp');
   } catch (err) {
     return res.status(500).json({ error: 'Failed to verify phone: ' + err.message });
   }
 
-  // Get group whitelist from Laravel DB
   let allowedIds;
   try {
     const { data } = await laravelClient.get('/api/groups/wa-ids');
     allowedIds = new Set(data.ids || []);
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch group IDs from Laravel: ' + err.message });
+    return res.status(500).json({ error: 'Failed to fetch group IDs: ' + err.message });
   }
 
-  // Fetch WhatsApp groups, filter to DB-registered, exclude groups where already member
   let groups;
   try {
     const allGroups = await sock.groupFetchAllParticipating();
@@ -664,18 +669,11 @@ app.post('/groups/add-admin', requireApiKey, async (req, res) => {
       const waId = g.id.replace('@g.us', '');
       return allowedIds.has(waId) && !g.isCommunity && !g.isCommunityAnnounce;
     });
-
-    // Filter out groups where the person is already a participant
-    groups = dbGroups.filter(g => {
-      const isAlready = g.participants?.some(p => p.id === participantJid);
-      if (isAlready) logger.info({ group: g.subject, phone }, 'Already in group — skipping');
-      return !isAlready;
-    });
+    groups = dbGroups.filter(g => !g.participants?.some(p => p.id === participantJid));
   } catch (err) {
     return res.status(500).json({ error: 'Failed to fetch groups: ' + err.message });
   }
 
-  // Limit to 12 groups per run (~1.5 hours) to stay ultra-safe
   const MAX_PER_RUN = 12;
   const batch = groups.slice(0, MAX_PER_RUN);
   const remaining = groups.length - batch.length;
@@ -697,14 +695,12 @@ app.post('/groups/add-admin', requireApiKey, async (req, res) => {
 
   res.json({
     success: true,
-    message: `Add-admin started for ${batch.length} groups (${remaining} remaining for next run). ~8 min/group.`,
+    message: `Add-admin started for ${batch.length} groups.`,
     batchSize: batch.length,
     totalRemaining: groups.length,
     estimatedDuration: `~${Math.round(batch.length * 8)} min`,
-    note: remaining > 0 ? `Run again tomorrow to process the next ${Math.min(remaining, MAX_PER_RUN)} groups.` : 'All groups will be processed in this run.',
   });
 
-  // Process in background — EXTREMELY SLOWLY
   (async () => {
     for (let i = 0; i < batch.length; i++) {
       const group = batch[i];
@@ -712,145 +708,60 @@ app.post('/groups/add-admin', requireApiKey, async (req, res) => {
       const name = group.subject || jid;
       addAdminStatus.current = `[${i + 1}/${batch.length}] ${name}`;
 
-      // --- Step 1: Add to group ---
       try {
         const result = await sock.groupParticipantsUpdate(jid, [participantJid], 'add');
         const status = result?.[0]?.status || 'unknown';
-
         if (status === '200' || status === 200) {
           addAdminStatus.added++;
-          logger.info({ jid, name, phone, step: '1/2', progress: `${i + 1}/${batch.length}` }, 'Added to group');
         } else if (status === '409' || status === 409) {
           addAdminStatus.alreadyIn++;
-          logger.info({ jid, name, phone }, 'Already in group');
         } else {
-          logger.warn({ jid, name, phone, status, result }, 'Unexpected add result');
-          addAdminStatus.added++; // Assume success if no error thrown
+          addAdminStatus.added++;
         }
       } catch (err) {
-        logger.warn({ jid, name, phone, err: err.message }, 'Failed to add to group');
         addAdminStatus.failed.push({ name, action: 'add', error: err.message });
         addAdminStatus.processed++;
-        // Long pause even on failure
         await new Promise(r => setTimeout(r, 120_000 + Math.floor(Math.random() * 60_000)));
-        continue; // Skip promote if add failed
+        continue;
       }
 
-      // 90-150s delay before promoting
       await new Promise(r => setTimeout(r, 90_000 + Math.floor(Math.random() * 60_000)));
 
-      // --- Step 2: Promote to admin ---
       try {
         await sock.groupParticipantsUpdate(jid, [participantJid], 'promote');
         addAdminStatus.promoted++;
-        logger.info({ jid, name, phone, step: '2/2' }, 'Promoted to admin');
       } catch (err) {
-        logger.warn({ jid, name, phone, err: err.message }, 'Failed to promote to admin');
         addAdminStatus.failed.push({ name, action: 'promote', error: err.message });
       }
 
       addAdminStatus.processed++;
 
-      // --- Very long delay between groups: 3-5 minutes ---
       if (i < batch.length - 1) {
-        const groupDelay = 180_000 + Math.floor(Math.random() * 120_000);
-        logger.info(
-          { delay: Math.round(groupDelay / 1000), progress: `${i + 1}/${batch.length}` },
-          'Waiting before next group (add-admin)...',
-        );
-        await new Promise(r => setTimeout(r, groupDelay));
+        await new Promise(r => setTimeout(r, 180_000 + Math.floor(Math.random() * 120_000)));
       }
     }
 
     addAdminStatus.running = false;
     addAdminStatus.current = null;
     addAdminStatus.completedAt = new Date().toISOString();
-    logger.info({
-      phone,
-      batchSize: batch.length,
-      added: addAdminStatus.added,
-      promoted: addAdminStatus.promoted,
-      failed: addAdminStatus.failed.length,
-      remainingForNextRun: remaining,
-    }, 'Add-admin batch completed');
   })().catch(err => {
     addAdminStatus.running = false;
     addAdminStatus.error = err.message;
-    logger.error({ err: err.message }, 'Add-admin operation failed');
   });
 });
 
-/**
- * GET /groups/add-admin/status
- * Protected endpoint. Returns the progress of the add-admin operation.
- */
 app.get('/groups/add-admin/status', requireApiKey, (_req, res) => {
-  if (!addAdminStatus) {
-    return res.json({ started: false, message: 'No add-admin operation has been started.' });
-  }
+  if (!addAdminStatus) return res.json({ started: false });
   return res.json(addAdminStatus);
 });
 
-/**
- * POST /send/welcome
- * Protected endpoint. Sends a batch welcome message to a single group.
- * Called by Laravel daily cron. Goes through the global queue.
- *
- * Body: { group_wa_id, content }
- */
-app.post('/send/welcome', requireApiKey, async (req, res) => {
-  const { group_wa_id, content } = req.body || {};
-
-  if (!group_wa_id || !content) {
-    return res.status(400).json({
-      error: 'Invalid payload: group_wa_id and content are required',
-    });
-  }
-
-  const result = await sendWelcomeBatch(group_wa_id, content);
-
-  if (result.success) {
-    return res.json({ success: true, jid: result.jid });
-  }
-
-  return res.status(500).json({ success: false, jid: result.jid, error: result.error });
-});
-
-/**
- * POST /send/test
- * Protected endpoint. Sends a single test message to a WhatsApp group.
- *
- * Body: { group_wa_id, content }
- */
-app.post('/send/test', requireApiKey, async (req, res) => {
-  const { group_wa_id, content } = req.body || {};
-
-  if (!group_wa_id || !content) {
-    return res.status(400).json({
-      error: 'Invalid payload: group_wa_id and content are required',
-    });
-  }
-
-  const result = await testSend(group_wa_id, content);
-
-  if (result.success) {
-    return res.json({ success: true, jid: result.jid });
-  }
-
-  return res.status(500).json({ success: false, jid: result.jid, error: result.error });
-});
-
 // ---------------------------------------------------------------------------
-// 404 handler
+// 404 + Error handlers
 // ---------------------------------------------------------------------------
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.url}` });
 });
-
-// ---------------------------------------------------------------------------
-// Global error handler
-// ---------------------------------------------------------------------------
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
@@ -863,24 +774,24 @@ app.use((err, _req, res, _next) => {
 // ---------------------------------------------------------------------------
 
 async function start() {
-  logger.info('Starting Baileys campaigns service...');
+  logger.info('Starting Baileys campaigns service (multi-instance)...');
 
   try {
-    await connectToWhatsApp();
+    await initFromLaravel();
   } catch (err) {
-    logger.error({ err: err.message }, 'Failed to connect to WhatsApp on startup — will retry on reconnect');
+    logger.error({ err: err.message }, 'Failed to initialize instances');
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     logger.info({ port: PORT }, `HTTP server listening on 0.0.0.0:${PORT}`);
   });
 
-  // Graceful shutdown
   function gracefulShutdown(signal) {
     logger.info({ signal }, 'Received %s, shutting down...', signal);
-    const sock = getSocket();
-    if (sock) {
-      sock.end(undefined);
+    for (const inst of getAllInstances()) {
+      if (inst.socket) {
+        try { inst.socket.end(undefined); } catch { /* ignore */ }
+      }
     }
     server.close(() => {
       logger.info('HTTP server closed');

@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { BarChart2, List, LogOut, MessageSquare, Users, Wifi, WifiOff } from 'lucide-react'
+import { BarChart2, List, LogOut, MessageSquare, Users, Wifi, WifiOff, Smartphone } from 'lucide-react'
 import { useAuthContext } from '../contexts/AuthContext'
 import { useWhatsAppStatus } from '../hooks/useSeries'
 
@@ -70,6 +70,23 @@ export default function Layout() {
             <span className="flex-1">WhatsApp</span>
             <span className={'w-2.5 h-2.5 rounded-full shrink-0 ' + (waConnected ? 'bg-green-400' : 'bg-red-400')} />
           </NavLink>
+
+          {/* WhatsApp Numbers link (admin only) */}
+          {isAdmin && (
+            <NavLink
+              to="/whatsapp/numbers"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-green-600 text-white'
+                    : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                }`
+              }
+            >
+              <Smartphone size={18} />
+              <span className="flex-1">Num\u00e9ros</span>
+            </NavLink>
+          )}
         </nav>
 
         {/* User */}

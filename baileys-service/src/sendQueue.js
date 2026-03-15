@@ -1,15 +1,14 @@
 import logger from './logger.js';
+import { canSendGlobally } from './instanceManager.js';
 
 const log = logger.child({ module: 'send-queue' });
 
 /**
  * Global send queue — serializes ALL WhatsApp message sends.
  *
- * Safety-first approach:
- *   - One queue, FIFO with priority support
- *   - Conservative delays between sends to mimic human behavior
- *   - Daily message limit to avoid WhatsApp flagging the account
- *   - Welcome messages have priority but still respect delays
+ * With multi-instance, the daily quota is managed per-instance in instanceManager.
+ * The queue still enforces global timing (MIN_DELAY_BETWEEN_SENDS) to prevent
+ * WhatsApp rate-limiting across all instances.
  */
 
 /** @type {Array<{ fn: () => Promise<void>, label: string, priority: number, type: string }>} */
@@ -31,51 +30,6 @@ export const CAMPAIGN_DELAY_MAX = 300_000;  // 5 minutes
 /** Delay before welcome batch message send — randomized */
 export const WELCOME_DELAY_MIN = 60_000;   // 1 minute
 export const WELCOME_DELAY_MAX = 120_000;  // 2 minutes
-
-// ---------------------------------------------------------------------------
-// Daily message counter — resets at midnight UTC
-// ---------------------------------------------------------------------------
-
-/** Maximum messages per day (campaigns + welcome combined) */
-const MAX_MESSAGES_PER_DAY = parseInt(process.env.MAX_MESSAGES_PER_DAY || '50', 10);
-
-let dailySentCount = 0;
-let dailyDate = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
-
-function resetDailyCounterIfNeeded() {
-  const today = new Date().toISOString().slice(0, 10);
-  if (today !== dailyDate) {
-    log.info(
-      { previousDate: dailyDate, previousCount: dailySentCount, newDate: today },
-      'Daily counter reset',
-    );
-    dailySentCount = 0;
-    dailyDate = today;
-  }
-}
-
-function incrementDailyCounter() {
-  resetDailyCounterIfNeeded();
-  dailySentCount++;
-}
-
-/**
- * Check if we can still send today.
- * @returns {boolean}
- */
-export function canSendToday() {
-  resetDailyCounterIfNeeded();
-  return dailySentCount < MAX_MESSAGES_PER_DAY;
-}
-
-/**
- * Get remaining daily quota.
- * @returns {number}
- */
-export function getRemainingDailyQuota() {
-  resetDailyCounterIfNeeded();
-  return Math.max(0, MAX_MESSAGES_PER_DAY - dailySentCount);
-}
 
 // ---------------------------------------------------------------------------
 // Queue management
@@ -145,29 +99,25 @@ async function processQueue() {
   processing = true;
 
   while (queue.length > 0) {
-    resetDailyCounterIfNeeded();
-
     const job = queue.shift();
 
-    // Check daily limit — welcome messages always pass, campaigns are blocked
-    if (job.type === 'campaign' && dailySentCount >= MAX_MESSAGES_PER_DAY) {
+    // Check global quota — welcome messages always pass, campaigns are blocked
+    if (job.type === 'campaign' && !canSendGlobally()) {
       log.warn(
-        { label: job.label, dailySentCount, max: MAX_MESSAGES_PER_DAY },
-        'Daily message limit reached — campaign send SKIPPED. Will resume tomorrow.',
+        { label: job.label },
+        'All instances at daily limit — campaign send SKIPPED',
       );
-      // Resolve the promise so the campaign flow continues (reports as skipped)
       try { await job.fn(); } catch { /* ignore */ }
       continue;
     }
 
     log.info(
-      { label: job.label, type: job.type, remaining: queue.length, dailySent: dailySentCount, dailyMax: MAX_MESSAGES_PER_DAY },
+      { label: job.label, type: job.type, remaining: queue.length },
       'Processing send job',
     );
 
     try {
       await job.fn();
-      incrementDailyCounter();
     } catch (err) {
       log.error({ label: job.label, err: err.message }, 'Job execution error');
     }
@@ -186,16 +136,12 @@ async function processQueue() {
 // ---------------------------------------------------------------------------
 
 /**
- * Get current queue and daily stats (for /health endpoint).
- * @returns {{ size: number, processing: boolean, dailySent: number, dailyMax: number, dailyRemaining: number }}
+ * Get current queue stats (for /health endpoint).
+ * Daily quota info now comes from instanceManager.
  */
 export function getQueueStats() {
-  resetDailyCounterIfNeeded();
   return {
     size: queue.length,
     processing,
-    dailySent: dailySentCount,
-    dailyMax: MAX_MESSAGES_PER_DAY,
-    dailyRemaining: Math.max(0, MAX_MESSAGES_PER_DAY - dailySentCount),
   };
 }

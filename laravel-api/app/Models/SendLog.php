@@ -17,6 +17,7 @@ class SendLog extends Model
         'status',
         'sent_at',
         'error_message',
+        'whatsapp_number_id',
     ];
 
     protected $casts = [
@@ -31,5 +32,10 @@ class SendLog extends Model
     public function group(): BelongsTo
     {
         return $this->belongsTo(Group::class);
+    }
+
+    public function whatsappNumber(): BelongsTo
+    {
+        return $this->belongsTo(WhatsAppNumber::class);
     }
 }

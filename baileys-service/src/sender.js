@@ -1,14 +1,11 @@
 import axios from 'axios';
-import { getSocket, isConnected } from './whatsapp.js';
-import { enqueue, canSendToday, getRemainingDailyQuota, CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX } from './sendQueue.js';
+import { isAnyConnected, pickNextInstance, getInstanceForGroup, incrementInstanceQuota, canSendGlobally, getRemainingGlobalQuota, getInstance } from './instanceManager.js';
+import { enqueue, CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX } from './sendQueue.js';
 import logger from './logger.js';
 
 const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8001';
 const LARAVEL_API_KEY = process.env.LARAVEL_API_KEY || '';
 
-/**
- * Axios instance pre-configured with Laravel API base URL and auth header.
- */
 const laravelClient = axios.create({
   baseURL: LARAVEL_API_URL,
   timeout: 15_000,
@@ -18,22 +15,10 @@ const laravelClient = axios.create({
   },
 });
 
-/**
- * Returns a random integer between min (inclusive) and max (inclusive).
- * @param {number} min
- * @param {number} max
- * @returns {number}
- */
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-/**
- * Shuffle an array in-place using Fisher-Yates algorithm.
- * @template T
- * @param {T[]} array
- * @returns {T[]}
- */
 function shuffle(array) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -42,53 +27,30 @@ function shuffle(array) {
   return array;
 }
 
-/**
- * Sleep for the given number of milliseconds.
- * @param {number} ms
- * @returns {Promise<void>}
- */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Build the WhatsApp group JID from a raw group ID.
- * Baileys expects the format: <id>@g.us
- * If the ID already contains '@', it is returned as-is.
- * @param {string} groupWaId
- * @returns {string}
- */
 function toGroupJid(groupWaId) {
   return groupWaId.includes('@') ? groupWaId : `${groupWaId}@g.us`;
 }
 
-/**
- * Verify that a group exists and is accessible by fetching its metadata.
- * Returns true if the group is valid, false otherwise.
- * @param {string} jid
- * @returns {Promise<boolean>}
- */
-async function isGroupValid(jid) {
-  const sock = getSocket();
+async function isGroupValid(sock, jid) {
   if (!sock) return false;
   try {
     const meta = await sock.groupMetadata(jid);
     return !!meta?.id;
   } catch (err) {
-    logger.warn({ jid, err: err.message }, 'Group metadata fetch failed — group may be invalid');
+    logger.warn({ jid, err: err.message }, 'Group metadata fetch failed');
     return false;
   }
 }
 
 /**
- * Report the result of a single group send to Laravel.
- * @param {object} params
- * @param {string|number} params.message_id
- * @param {string} params.group_wa_id
- * @param {'sent'|'failed'} params.status
- * @param {string} [params.error_message]
+ * Report a single group send result to Laravel.
+ * Includes instance_slug for multi-instance tracking.
  */
-async function reportGroupResult({ message_id, group_wa_id, language, content, status, error_message }) {
+async function reportGroupResult({ message_id, group_wa_id, language, content, status, error_message, instance_slug }) {
   try {
     await laravelClient.post('/api/send/report', {
       message_id,
@@ -97,24 +59,17 @@ async function reportGroupResult({ message_id, group_wa_id, language, content, s
       ...(language ? { language } : {}),
       ...(content ? { content_sent: content } : {}),
       ...(error_message ? { error_message } : {}),
+      ...(instance_slug ? { instance_slug } : {}),
     });
-    logger.debug({ message_id, group_wa_id, status }, 'Group result reported to Laravel');
+    logger.debug({ message_id, group_wa_id, status, instance_slug }, 'Group result reported');
   } catch (err) {
-    logger.error(
-      { message_id, group_wa_id, status, err: err.message },
-      'Failed to report group result to Laravel',
-    );
+    logger.error({ message_id, group_wa_id, status, err: err.message }, 'Failed to report group result');
   }
 }
 
 /**
  * Report campaign completion to Laravel.
- * @param {object} params
- * @param {string|number} params.message_id
- * @param {number} params.total
- * @param {number} params.sent_count
- * @param {number} params.failed_count
- * @param {number} [params.quota_exceeded_count]
+ * Supports quota_exceeded_count for carry-over system.
  */
 async function reportCampaignComplete({ message_id, total, sent_count, failed_count, quota_exceeded_count = 0 }) {
   const maxRetries = 3;
@@ -147,14 +102,6 @@ async function reportCampaignComplete({ message_id, total, sent_count, failed_co
   }
 }
 
-/**
- * Send a message with retry logic for transient network errors.
- * @param {import('@whiskeysockets/baileys').WASocket} sock
- * @param {string} jid
- * @param {string} content
- * @param {number} [maxRetries=2]
- * @returns {Promise<boolean>}
- */
 async function sendWithRetry(sock, jid, content, maxRetries = 2) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -177,27 +124,19 @@ async function sendWithRetry(sock, jid, content, maxRetries = 2) {
 
 /**
  * Send a campaign message to a list of WhatsApp groups.
- *
- * The targets are shuffled before sending to randomize the order and avoid
- * detection patterns. A random delay between DELAY_MIN and DELAY_MAX ms is
- * applied between each group send.
- *
- * @param {object} payload
- * @param {string|number} payload.message_id - Internal Laravel message ID
- * @param {Array<{group_wa_id: string, language: string, content: string}>} payload.targets
- * @returns {Promise<void>}
+ * Uses getInstanceForGroup() for group affinity (anti-ban).
+ * Reports quota_exceeded for carry-over when daily limit reached.
  */
 export async function sendCampaignMessage(payload) {
   const { message_id, targets } = payload;
 
   if (!message_id || !Array.isArray(targets) || targets.length === 0) {
-    logger.error({ payload }, 'Invalid campaign payload — missing message_id or targets');
+    logger.error({ payload }, 'Invalid campaign payload');
     return;
   }
 
-  if (!isConnected()) {
-    logger.error({ message_id }, 'Cannot send campaign: WhatsApp is not connected');
-    // Best-effort: report all targets as failed
+  if (!isAnyConnected()) {
+    logger.error({ message_id }, 'Cannot send: no WhatsApp instance connected');
     for (const target of targets) {
       await reportGroupResult({
         message_id,
@@ -205,35 +144,20 @@ export async function sendCampaignMessage(payload) {
         language: target.language,
         content: target.content,
         status: 'failed',
-        error_message: 'WhatsApp socket is not connected',
+        error_message: 'No WhatsApp instance connected',
       });
     }
-    await reportCampaignComplete({
-      message_id,
-      total: targets.length,
-      sent_count: 0,
-      failed_count: targets.length,
-    });
+    await reportCampaignComplete({ message_id, total: targets.length, sent_count: 0, failed_count: targets.length });
     return;
   }
 
-  const sock = getSocket();
-
-  // Shuffle targets for randomisation
   const shuffled = shuffle([...targets]);
+  const remaining = getRemainingGlobalQuota();
+  logger.info({ message_id, total: shuffled.length, dailyRemaining: remaining }, 'Starting campaign send');
 
-  const remaining = getRemainingDailyQuota();
-  logger.info(
-    { message_id, total: shuffled.length, dailyRemaining: remaining },
-    'Starting campaign send',
-  );
-
-  // If daily limit already reached, skip entire campaign (quota_exceeded for carry-over)
-  if (!canSendToday()) {
-    logger.warn(
-      { message_id, total: shuffled.length, dailyRemaining: remaining },
-      'Daily message limit reached — entire campaign DEFERRED',
-    );
+  // If all instances at daily limit, report as quota_exceeded for carry-over
+  if (!canSendGlobally()) {
+    logger.warn({ message_id, total: shuffled.length }, 'All instances at daily limit — campaign DEFERRED (quota_exceeded)');
     for (const target of shuffled) {
       await reportGroupResult({
         message_id,
@@ -263,13 +187,9 @@ export async function sendCampaignMessage(payload) {
     const jid = toGroupJid(group_wa_id);
     const groupIndex = i;
 
-    // Check daily limit before each group send
-    if (!canSendToday()) {
-      logger.warn(
-        { message_id, group_wa_id, index: groupIndex + 1, total: shuffled.length },
-        'Daily limit reached mid-campaign — remaining groups deferred (quota_exceeded)',
-      );
-      // Report remaining groups as quota_exceeded (not failed — will be retried tomorrow)
+    // Check quota before each group — report remaining as quota_exceeded for carry-over
+    if (!canSendGlobally()) {
+      logger.warn({ message_id, group_wa_id, index: groupIndex + 1, total: shuffled.length }, 'All instances at limit mid-campaign — remaining deferred');
       for (let j = i; j < shuffled.length; j++) {
         quota_exceeded_count++;
         await reportGroupResult({
@@ -284,54 +204,47 @@ export async function sendCampaignMessage(payload) {
       break;
     }
 
-    // Each group send goes through the global queue to prevent
-    // interleaving with other campaigns or welcome messages
     await enqueue(async () => {
-      logger.info(
-        { message_id, group_wa_id, jid, language, index: groupIndex + 1, total: shuffled.length },
-        'Processing group target',
-      );
-
-      // --- Validate group ---
-      const valid = await isGroupValid(jid);
-      if (!valid) {
-        logger.warn({ message_id, group_wa_id, jid }, 'Skipping invalid group');
+      // Use group affinity: same group always uses same instance (anti-ban)
+      const instance = getInstanceForGroup(group_wa_id);
+      if (!instance) {
         failed_count++;
-        await reportGroupResult({
-          message_id,
-          group_wa_id,
-          language,
-          content,
-          status: 'failed',
-          error_message: 'Group not found or not accessible',
-        });
+        await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message: 'No available instance' });
         return;
       }
 
-      // --- Send message ---
+      const sock = instance.socket;
+      const instanceSlug = instance.slug;
+
+      logger.info({ message_id, group_wa_id, jid, language, instance: instanceSlug, index: groupIndex + 1, total: shuffled.length }, 'Processing group target');
+
+      const valid = await isGroupValid(sock, jid);
+      if (!valid) {
+        logger.warn({ message_id, group_wa_id, jid }, 'Skipping invalid group');
+        failed_count++;
+        await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message: 'Group not found or not accessible', instance_slug: instanceSlug });
+        return;
+      }
+
       try {
         await sendWithRetry(sock, jid, content);
         sent_count++;
-        logger.info({ message_id, group_wa_id, jid }, 'Message sent successfully');
-        await reportGroupResult({ message_id, group_wa_id, language, content, status: 'sent' });
+        incrementInstanceQuota(instanceSlug);
+        logger.info({ message_id, group_wa_id, jid, instance: instanceSlug }, 'Message sent');
+        await reportGroupResult({ message_id, group_wa_id, language, content, status: 'sent', instance_slug: instanceSlug });
       } catch (err) {
         failed_count++;
         const error_message = err?.message || String(err);
-        logger.error({ message_id, group_wa_id, jid, err: error_message }, 'Failed to send message to group');
-        await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message });
+        logger.error({ message_id, group_wa_id, jid, instance: instanceSlug, err: error_message }, 'Failed to send');
+        await reportGroupResult({ message_id, group_wa_id, language, content, status: 'failed', error_message, instance_slug: instanceSlug });
       }
 
-      // --- Conservative delay after send (anti-spam) ---
       const delay = randomInt(CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX);
-      logger.info(
-        { delay, index: groupIndex + 1, total: shuffled.length },
-        `Campaign delay: ${(delay / 1000).toFixed(1)}s`,
-      );
+      logger.info({ delay, index: groupIndex + 1, total: shuffled.length }, `Campaign delay: ${(delay / 1000).toFixed(1)}s`);
       await sleep(delay);
     }, `campaign:${message_id}:group:${group_wa_id}`, 'normal');
   }
 
-  // --- Final report ---
   await reportCampaignComplete({
     message_id,
     total: shuffled.length,
@@ -340,34 +253,31 @@ export async function sendCampaignMessage(payload) {
     quota_exceeded_count,
   });
 
-  logger.info(
-    { message_id, total: shuffled.length, sent_count, failed_count, quota_exceeded_count },
-    'Campaign send complete',
-  );
+  logger.info({ message_id, total: shuffled.length, sent_count, failed_count, quota_exceeded_count }, 'Campaign send complete');
 }
 
 /**
- * Send a single test message to a WhatsApp group.
- * No report is sent to Laravel and no delay is applied.
- *
- * @param {string} group_wa_id - Raw group ID or full JID
- * @param {string} content - Message text
- * @returns {Promise<{success: boolean, jid: string, error?: string}>}
+ * Send a single test message.
+ * Optionally specify instance_slug, otherwise uses rotation.
  */
-export async function testSend(group_wa_id, content) {
-  if (!isConnected()) {
-    const error = 'WhatsApp socket is not connected';
+export async function testSend(group_wa_id, content, instanceSlug) {
+  const instance = instanceSlug
+    ? getInstance(instanceSlug)
+    : pickNextInstance();
+
+  if (!instance?.socket) {
+    const error = 'No WhatsApp instance available';
     logger.error({ group_wa_id }, error);
     return { success: false, jid: toGroupJid(group_wa_id), error };
   }
 
-  const sock = getSocket();
   const jid = toGroupJid(group_wa_id);
 
   try {
-    await sendWithRetry(sock, jid, content);
-    logger.info({ group_wa_id, jid }, 'Test message sent successfully');
-    return { success: true, jid };
+    await sendWithRetry(instance.socket, jid, content);
+    incrementInstanceQuota(instance.slug);
+    logger.info({ group_wa_id, jid, instance: instance.slug }, 'Test message sent');
+    return { success: true, jid, instance_slug: instance.slug };
   } catch (err) {
     const error = err?.message || String(err);
     logger.error({ group_wa_id, jid, err: error }, 'Test message failed');

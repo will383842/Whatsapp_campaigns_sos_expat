@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\CampaignMessage;
 use App\Models\Group;
 use App\Models\SendLog;
+use App\Models\WhatsAppNumber;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,7 @@ class SendController extends Controller
             'status'        => ['required', Rule::in(['sent', 'failed'])],
             'sent_at'       => ['nullable', 'date'],
             'error_message' => ['nullable', 'string'],
+            'instance_slug' => ['nullable', 'string', 'max:50'],
         ]);
 
         $group = Group::where('whatsapp_group_id', $validated['group_wa_id'])->first();
@@ -43,14 +45,28 @@ class SendController extends Controller
             $logStatus = 'quota_exceeded';
         }
 
+        // Resolve WhatsApp number from instance_slug
+        $whatsappNumberId = null;
+        if (! empty($validated['instance_slug'])) {
+            $waNumber = WhatsAppNumber::where('slug', $validated['instance_slug'])->first();
+            if ($waNumber) {
+                $whatsappNumberId = $waNumber->id;
+                // Increment total messages counter on successful send
+                if ($validated['status'] === 'sent') {
+                    $waNumber->increment('messages_total');
+                }
+            }
+        }
+
         SendLog::create([
-            'message_id'    => $validated['message_id'],
-            'group_id'      => $group->id,
-            'language'      => $validated['language'] ?? '',
-            'content_sent'  => $validated['content_sent'] ?? '',
-            'status'        => $logStatus,
-            'sent_at'       => $validated['sent_at'] ?? now(),
-            'error_message' => $logStatus === 'quota_exceeded' ? 'quota_exceeded' : ($validated['error_message'] ?? null),
+            'message_id'         => $validated['message_id'],
+            'group_id'           => $group->id,
+            'language'           => $validated['language'] ?? '',
+            'content_sent'       => $validated['content_sent'] ?? '',
+            'status'             => $logStatus,
+            'sent_at'            => $validated['sent_at'] ?? now(),
+            'error_message'      => $logStatus === 'quota_exceeded' ? 'quota_exceeded' : ($validated['error_message'] ?? null),
+            'whatsapp_number_id' => $whatsappNumberId,
         ]);
 
         return response()->json(['message' => 'Report received.'], 201);
