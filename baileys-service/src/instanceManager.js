@@ -219,7 +219,7 @@ function getWarmupInfo(inst) {
  * @param {string|null} createdAtStr - ISO date from Laravel (null = now)
  * @returns {Promise<Instance>}
  */
-export async function createInstance(slug, phone, dailyMax = 50, rotationEnabled = true, createdAtStr = null) {
+export async function createInstance(slug, phone, dailyMax = 50, rotationEnabled = true, createdAtStr = null, initialStatus = 'disconnected') {
   if (instances.has(slug)) {
     log.warn({ slug }, 'Instance already exists, returning existing');
     return instances.get(slug);
@@ -237,7 +237,7 @@ export async function createInstance(slug, phone, dailyMax = 50, rotationEnabled
     lastQr: null,
     dailySent: 0,
     dailyMax,
-    status: 'disconnected',
+    status: initialStatus,
     rotationEnabled,
     createdAt: createdAtStr ? new Date(createdAtStr) : new Date(),
     lastSendAt: 0,
@@ -805,6 +805,7 @@ export async function initFromLaravel() {
           num.daily_max || 50,
           num.is_rotation_enabled !== false,
           num.created_at || null,
+          num.status === 'banned' ? 'banned' : 'disconnected',
         );
       }
 

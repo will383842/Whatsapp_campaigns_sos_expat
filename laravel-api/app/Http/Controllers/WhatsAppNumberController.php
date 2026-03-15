@@ -222,6 +222,11 @@ class WhatsAppNumberController extends Controller
         $number = WhatsAppNumber::findOrFail($id);
         $force = $request->boolean('force', false);
 
+        // Clear banned status in DB so the number is picked up on next boot
+        if ($number->status === 'banned') {
+            $number->update(['status' => 'disconnected']);
+        }
+
         $qr = null;
         try {
             $response = $this->baileysClient()->post("/instances/{$number->slug}/restart", [
@@ -277,8 +282,9 @@ class WhatsAppNumberController extends Controller
      */
     public function active(): JsonResponse
     {
-        $numbers = WhatsAppNumber::whereIn('status', ['active', 'disconnected'])
-            ->get(['slug', 'phone', 'daily_max', 'is_rotation_enabled', 'created_at']);
+        // Include all non-paused numbers (even banned — Baileys manages their status)
+        $numbers = WhatsAppNumber::where('status', '!=', 'paused')
+            ->get(['slug', 'phone', 'daily_max', 'is_rotation_enabled', 'created_at', 'status']);
 
         return response()->json(['numbers' => $numbers]);
     }
