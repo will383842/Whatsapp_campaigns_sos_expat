@@ -59,14 +59,14 @@ class SendMessageJob implements ShouldQueue
             return;
         }
 
-        // Guard: only process pending or sending (dispatcher sets sending atomically)
-        if (! in_array($message->status, ['pending', 'sending'], true)) {
+        // Guard: only process pending, sending, or partially_sent
+        if (! in_array($message->status, ['pending', 'sending', 'partially_sent'], true)) {
             Log::info("SendMessageJob: message #{$this->messageId} is already {$message->status}, skipping.");
             return;
         }
 
         // Ensure status is sending
-        if ($message->status === 'pending') {
+        if (in_array($message->status, ['pending', 'partially_sent'], true)) {
             $message->update(['status' => 'sending']);
         }
 
@@ -142,6 +142,12 @@ class SendMessageJob implements ShouldQueue
         // Index message_targets by group_id for quick lookup
         $messageTargetsByGroupId = $message->targets->keyBy('group_id');
 
+        // Exclude groups already successfully sent (for carry-over retries)
+        $alreadySentGroupIds = SendLog::where('message_id', $message->id)
+            ->where('status', 'sent')
+            ->pluck('group_id')
+            ->toArray();
+
         // Resolve group collection
         $groups = match ($targetingMode) {
             'by_language' => Group::whereIn('language', $series->target_languages ?? [])
@@ -157,6 +163,12 @@ class SendMessageJob implements ShouldQueue
 
             default => collect(),
         };
+
+        // Filter out groups already sent
+        if (! empty($alreadySentGroupIds)) {
+            $groups = $groups->reject(fn ($group) => in_array($group->id, $alreadySentGroupIds));
+            Log::info("SendMessageJob: message #{$message->id} — excluded " . count($alreadySentGroupIds) . " already-sent groups.");
+        }
 
         foreach ($groups as $group) {
             // Prefer custom_content from message_target, otherwise use translation for group's language

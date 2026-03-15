@@ -16,17 +16,6 @@ class SendController extends Controller
     /**
      * Receive an individual group send result from the Baileys service.
      * Creates a SendLog entry for each group delivery attempt.
-     *
-     * Expected payload:
-     * {
-     *   "message_id": 1,
-     *   "group_wa_id": "1234567890@g.us",
-     *   "language": "fr",
-     *   "content_sent": "...",
-     *   "status": "sent" | "failed",
-     *   "sent_at": "2025-01-01T10:00:00Z",
-     *   "error_message": null
-     * }
      */
     public function report(Request $request): JsonResponse
     {
@@ -47,14 +36,21 @@ class SendController extends Controller
             return response()->json(['message' => 'Group not found.'], 404);
         }
 
+        // Determine the actual SendLog status:
+        // If error_message is 'quota_exceeded', store as quota_exceeded (not failed)
+        $logStatus = $validated['status'];
+        if ($validated['status'] === 'failed' && ($validated['error_message'] ?? '') === 'quota_exceeded') {
+            $logStatus = 'quota_exceeded';
+        }
+
         SendLog::create([
             'message_id'    => $validated['message_id'],
             'group_id'      => $group->id,
             'language'      => $validated['language'] ?? '',
             'content_sent'  => $validated['content_sent'] ?? '',
-            'status'        => $validated['status'],
+            'status'        => $logStatus,
             'sent_at'       => $validated['sent_at'] ?? now(),
-            'error_message' => $validated['error_message'] ?? null,
+            'error_message' => $logStatus === 'quota_exceeded' ? 'quota_exceeded' : ($validated['error_message'] ?? null),
         ]);
 
         return response()->json(['message' => 'Report received.'], 201);
@@ -64,50 +60,65 @@ class SendController extends Controller
      * Receive the final summary from Baileys once all groups have been processed.
      * Updates the CampaignMessage status and increments the series sent_messages counter.
      *
-     * Expected payload:
-     * {
-     *   "message_id": 1,
-     *   "total_sent": 60,
-     *   "total_failed": 2,
-     *   "completed_at": "2025-01-01T10:05:00Z"
-     * }
+     * If quota_exceeded_count > 0, the message is marked as 'partially_sent' for
+     * automatic carry-over by the RetryQuotaExceededMessages command.
      */
     public function reportComplete(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'message_id'   => ['required', 'integer', 'exists:campaign_messages,id'],
-            // Accept both naming conventions (total_sent/sent_count)
-            'total_sent'   => ['nullable', 'integer', 'min:0'],
-            'total_failed' => ['nullable', 'integer', 'min:0'],
-            'sent_count'   => ['nullable', 'integer', 'min:0'],
-            'failed_count' => ['nullable', 'integer', 'min:0'],
-            'total'        => ['nullable', 'integer', 'min:0'],
-            'completed_at' => ['nullable', 'date'],
+            'message_id'           => ['required', 'integer', 'exists:campaign_messages,id'],
+            'total_sent'           => ['nullable', 'integer', 'min:0'],
+            'total_failed'         => ['nullable', 'integer', 'min:0'],
+            'sent_count'           => ['nullable', 'integer', 'min:0'],
+            'failed_count'         => ['nullable', 'integer', 'min:0'],
+            'quota_exceeded_count' => ['nullable', 'integer', 'min:0'],
+            'total'                => ['nullable', 'integer', 'min:0'],
+            'completed_at'         => ['nullable', 'date'],
         ]);
 
         // Normalize field names: accept both conventions
-        $totalSent   = $validated['total_sent'] ?? $validated['sent_count'] ?? 0;
-        $totalFailed = $validated['total_failed'] ?? $validated['failed_count'] ?? 0;
+        $totalSent          = $validated['total_sent'] ?? $validated['sent_count'] ?? 0;
+        $totalFailed        = $validated['total_failed'] ?? $validated['failed_count'] ?? 0;
+        $quotaExceededCount = $validated['quota_exceeded_count'] ?? 0;
 
         $message = CampaignMessage::with('series')->findOrFail($validated['message_id']);
 
-        DB::transaction(function () use ($message, $totalSent, $totalFailed) {
-            $finalStatus = $totalSent > 0 ? 'sent' : 'failed';
+        DB::transaction(function () use ($message, $totalSent, $totalFailed, $quotaExceededCount) {
+            // Determine final status based on quota exceeded
+            if ($quotaExceededCount > 0) {
+                // Some groups were not sent due to quota — carry over
+                $finalStatus = 'partially_sent';
 
-            $message->update([
-                'status'  => $finalStatus,
-                'sent_at' => now(),
-            ]);
+                // Save original_scheduled_at only on the first partial send
+                if (! $message->original_scheduled_at) {
+                    $message->original_scheduled_at = $message->scheduled_at;
+                }
+
+                $message->update([
+                    'status'               => $finalStatus,
+                    'original_scheduled_at' => $message->original_scheduled_at,
+                ]);
+
+                Log::info("SendController: message #{$message->id} partially sent — {$totalSent} sent, {$quotaExceededCount} quota exceeded, will carry over.");
+            } else {
+                $finalStatus = $totalSent > 0 ? 'sent' : 'failed';
+
+                $message->update([
+                    'status'  => $finalStatus,
+                    'sent_at' => now(),
+                ]);
+            }
 
             $series = $message->series;
 
-            if ($totalSent > 0) {
+            if ($totalSent > 0 && $finalStatus !== 'partially_sent') {
                 $series->increment('sent_messages');
             }
 
             // Check if all messages are now sent/failed — if so, mark series as completed
+            // Do NOT complete if any message is partially_sent (still has pending groups)
             $pendingOrSending = $series->messages()
-                ->whereIn('status', ['pending', 'sending'])
+                ->whereIn('status', ['pending', 'sending', 'partially_sent'])
                 ->exists();
 
             if (! $pendingOrSending) {

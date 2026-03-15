@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../api/client'
-import type { CampaignSeries, Group } from '../types/series'
+import type { CampaignSeries, Group, QueueStatus } from '../types/series'
 
 // ── Series list ──────────────────────────────────────────────────────────────
 
@@ -180,6 +180,19 @@ export function useTranslateSeries(id: number | string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['series', id] })
     },
+  })
+}
+
+// ── Queue status ──────────────────────────────────────────────────────────────
+
+export function useQueueStatus() {
+  return useQuery<QueueStatus>({
+    queryKey: ['queue-status'],
+    queryFn: async () => {
+      const res = await api.get('/api/queue/status')
+      return res.data
+    },
+    refetchInterval: 30000, // poll every 30s
   })
 }
 

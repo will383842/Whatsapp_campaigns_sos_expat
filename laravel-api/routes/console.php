@@ -16,6 +16,10 @@ Schedule::command('campaigns:dispatch')->everyMinute()->withoutOverlapping();
 // Clean stuck messages every 30 minutes (messages in "sending" state for > 2 hours).
 Schedule::command('campaigns:clean-stuck')->everyThirtyMinutes()->withoutOverlapping();
 
+// Retry partially_sent messages (quota carry-over) every minute.
+// Only dispatches if it's a new day since the last quota_exceeded attempt.
+Schedule::command('campaigns:retry-quota')->everyMinute()->withoutOverlapping();
+
 // Send batch welcome messages once a day at 10:00 Paris time.
 // Groups all new members per group into ONE message instead of individual sends.
 Schedule::command('welcome:send-batch')

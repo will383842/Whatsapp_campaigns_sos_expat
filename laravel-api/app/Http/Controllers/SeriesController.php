@@ -309,6 +309,9 @@ class SeriesController extends Controller
 
     /**
      * Resume a paused series.
+     *
+     * Does NOT dispatch messages immediately — the scheduler cron (campaigns:dispatch)
+     * will pick them up when their scheduled_at time arrives, respecting the send days.
      */
     public function resume(int $id): JsonResponse
     {
@@ -320,19 +323,19 @@ class SeriesController extends Controller
             ], 422);
         }
 
-        $pendingMessages = $series->messages()->where('status', 'pending')->get();
+        $pendingMessages = $series->messages()
+            ->whereIn('status', ['pending', 'partially_sent'])
+            ->get();
 
         $series->update(['status' => $pendingMessages->isNotEmpty() ? 'scheduled' : 'active']);
 
-        // Re-dispatch pending messages
-        foreach ($pendingMessages as $message) {
-            dispatch(new SendMessageJob($message->id));
-        }
+        // Do NOT dispatch messages here. The campaigns:dispatch cron handles dispatching
+        // based on scheduled_at dates. Dispatching all at once would ignore the send schedule.
 
         return response()->json([
-            'message'           => 'Series resumed.',
-            'dispatched_count'  => $pendingMessages->count(),
-            'series'            => $series->fresh(),
+            'message' => 'Series resumed. Messages will be sent according to their schedule.',
+            'pending_count' => $pendingMessages->count(),
+            'series'        => $series->fresh(),
         ]);
     }
 
@@ -350,7 +353,9 @@ class SeriesController extends Controller
         }
 
         DB::transaction(function () use ($series) {
-            $series->messages()->where('status', 'pending')->update(['status' => 'failed']);
+            $series->messages()
+                ->whereIn('status', ['pending', 'sending', 'partially_sent'])
+                ->update(['status' => 'failed']);
             $series->update(['status' => 'failed']);
         });
 

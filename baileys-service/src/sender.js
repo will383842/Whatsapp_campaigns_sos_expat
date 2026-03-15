@@ -114,14 +114,16 @@ async function reportGroupResult({ message_id, group_wa_id, language, content, s
  * @param {number} params.total
  * @param {number} params.sent_count
  * @param {number} params.failed_count
+ * @param {number} [params.quota_exceeded_count]
  */
-async function reportCampaignComplete({ message_id, total, sent_count, failed_count }) {
+async function reportCampaignComplete({ message_id, total, sent_count, failed_count, quota_exceeded_count = 0 }) {
   try {
     await laravelClient.post('/api/send/report/complete', {
       message_id,
       total,
       sent_count,
       failed_count,
+      quota_exceeded_count,
     });
     logger.info({ message_id, total, sent_count, failed_count }, 'Campaign complete reported to Laravel');
   } catch (err) {
@@ -213,7 +215,7 @@ export async function sendCampaignMessage(payload) {
     'Starting campaign send',
   );
 
-  // If daily limit already reached, skip entire campaign
+  // If daily limit already reached, skip entire campaign (quota_exceeded for carry-over)
   if (!canSendToday()) {
     logger.warn(
       { message_id, total: shuffled.length, dailyRemaining: remaining },
@@ -226,20 +228,22 @@ export async function sendCampaignMessage(payload) {
         language: target.language,
         content: target.content,
         status: 'failed',
-        error_message: 'Daily message limit reached — will retry tomorrow',
+        error_message: 'quota_exceeded',
       });
     }
     await reportCampaignComplete({
       message_id,
       total: shuffled.length,
       sent_count: 0,
-      failed_count: shuffled.length,
+      failed_count: 0,
+      quota_exceeded_count: shuffled.length,
     });
     return;
   }
 
   let sent_count = 0;
   let failed_count = 0;
+  let quota_exceeded_count = 0;
 
   for (let i = 0; i < shuffled.length; i++) {
     const { group_wa_id, language, content } = shuffled[i];
@@ -250,18 +254,18 @@ export async function sendCampaignMessage(payload) {
     if (!canSendToday()) {
       logger.warn(
         { message_id, group_wa_id, index: groupIndex + 1, total: shuffled.length },
-        'Daily limit reached mid-campaign — remaining groups skipped',
+        'Daily limit reached mid-campaign — remaining groups deferred (quota_exceeded)',
       );
-      // Report remaining groups as failed
+      // Report remaining groups as quota_exceeded (not failed — will be retried tomorrow)
       for (let j = i; j < shuffled.length; j++) {
-        failed_count++;
+        quota_exceeded_count++;
         await reportGroupResult({
           message_id,
           group_wa_id: shuffled[j].group_wa_id,
           language: shuffled[j].language,
           content: shuffled[j].content,
           status: 'failed',
-          error_message: 'Daily message limit reached',
+          error_message: 'quota_exceeded',
         });
       }
       break;
@@ -320,10 +324,11 @@ export async function sendCampaignMessage(payload) {
     total: shuffled.length,
     sent_count,
     failed_count,
+    quota_exceeded_count,
   });
 
   logger.info(
-    { message_id, total: shuffled.length, sent_count, failed_count },
+    { message_id, total: shuffled.length, sent_count, failed_count, quota_exceeded_count },
     'Campaign send complete',
   );
 }

@@ -52,6 +52,7 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
 
     // --- Stats ---
     Route::get('/stats', [StatsController::class, 'index']);
+    Route::get('/queue/status', [StatsController::class, 'queueStatus']);
 
     // --- WhatsApp connection ---
     Route::get('/whatsapp/status', [WhatsAppController::class, 'status']);

@@ -1,7 +1,7 @@
 export type SeriesStatus = 'draft' | 'scheduled' | 'active' | 'completed' | 'paused' | 'failed'
 export type SeriesType = 'drip' | 'one_shot'
 export type TargetingMode = 'by_language' | 'by_group' | 'hybrid'
-export type MessageStatus = 'pending' | 'sending' | 'sent' | 'failed'
+export type MessageStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'partially_sent'
 
 export interface User {
   id: number
@@ -38,6 +38,7 @@ export interface CampaignMessage {
   series_id: number
   order_index: number
   scheduled_at: string
+  original_scheduled_at: string | null
   status: MessageStatus
   sent_at: string | null
   translations: MessageTranslation[]
@@ -72,7 +73,7 @@ export interface SendLog {
   group_id: number
   language: string
   content_sent: string
-  status: 'sent' | 'failed'
+  status: 'sent' | 'failed' | 'quota_exceeded'
   sent_at: string | null
   error_message: string | null
   group?: Group
@@ -86,4 +87,24 @@ export interface Stats {
   by_language: { language: string; count: number }[]
   next_send: string | null
   last_30_days: { date: string; count: number }[]
+}
+
+export interface QueueStatusItem {
+  message_id: number
+  series_id: number
+  series_name: string
+  status: MessageStatus
+  original_scheduled_at: string | null
+  scheduled_at: string
+  groups_sent: number
+  groups_remaining: number
+  groups_total: number
+}
+
+export interface QueueStatus {
+  pending_messages: number
+  partially_sent_messages: number
+  sending_messages: number
+  next_scheduled_at: string | null
+  details: QueueStatusItem[]
 }

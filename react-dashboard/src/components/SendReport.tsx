@@ -6,17 +6,20 @@ interface Props {
   groups: Group[]
 }
 
-function getCellStatus(logs: SendLog[], messageId: number, groupId: number): 'sent' | 'failed' | 'pending' | 'none' {
+function getCellStatus(logs: SendLog[], messageId: number, groupId: number): 'sent' | 'failed' | 'quota_exceeded' | 'pending' | 'none' {
   const log = logs.find((l) => l.message_id === messageId && l.group_id === groupId)
   if (!log) return 'none'
-  return log.status === 'sent' ? 'sent' : 'failed'
+  if (log.status === 'sent') return 'sent'
+  if (log.status === 'quota_exceeded') return 'quota_exceeded'
+  return 'failed'
 }
 
-const CELL_DISPLAY: Record<string, { symbol: string; classes: string }> = {
-  sent: { symbol: '✅', classes: 'text-green-600' },
-  failed: { symbol: '❌', classes: 'text-red-500' },
-  pending: { symbol: '○', classes: 'text-gray-400' },
-  none: { symbol: '—', classes: 'text-gray-300' },
+const CELL_DISPLAY: Record<string, { symbol: string; classes: string; label: string }> = {
+  sent:           { symbol: '✅', classes: 'text-green-600',  label: 'Envoyé' },
+  failed:         { symbol: '❌', classes: 'text-red-500',    label: 'Échoué' },
+  quota_exceeded: { symbol: '🟠', classes: 'text-orange-500', label: 'En attente (quota)' },
+  pending:        { symbol: '○',  classes: 'text-gray-400',   label: 'En attente' },
+  none:           { symbol: '—',  classes: 'text-gray-300',   label: 'Non ciblé' },
 }
 
 export default function SendReport({ series, logs, groups }: Props) {
@@ -45,7 +48,7 @@ export default function SendReport({ series, logs, groups }: Props) {
     targetedGroups = groups.filter((g) => logGroupIds.has(g.id) || g.is_active)
   }
 
-  // Sent count per message
+  // Count per message
   const sentCountByMsg = messages.map((msg) =>
     logs.filter((l) => l.message_id === msg.id && l.status === 'sent').length
   )
@@ -74,7 +77,7 @@ export default function SendReport({ series, logs, groups }: Props) {
                 const status = getCellStatus(logs, msg.id, group.id)
                 const cell = CELL_DISPLAY[status]
                 return (
-                  <td key={msg.id} className={`text-center px-3 py-2.5 ${cell.classes}`}>
+                  <td key={msg.id} className={`text-center px-3 py-2.5 ${cell.classes}`} title={cell.label}>
                     {cell.symbol}
                   </td>
                 )
@@ -96,6 +99,14 @@ export default function SendReport({ series, logs, groups }: Props) {
           </tr>
         </tfoot>
       </table>
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 mt-3 px-3 text-xs text-gray-500">
+        <span className="flex items-center gap-1">✅ Envoyé</span>
+        <span className="flex items-center gap-1">❌ Échoué</span>
+        <span className="flex items-center gap-1">🟠 En attente quota</span>
+        <span className="flex items-center gap-1 text-gray-400">○ En attente</span>
+      </div>
 
       {logs.length === 0 && (
         <p className="text-center text-sm text-gray-400 py-6">

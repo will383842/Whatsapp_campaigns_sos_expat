@@ -1,14 +1,14 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries } from '../hooks/useSeries'
+import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
-import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp } from 'lucide-react'
+import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
 import SendReport from '../components/SendReport'
 import { useGroups } from '../hooks/useSeries'
 import { useQuery } from '@tanstack/react-query'
 import api from '../api/client'
-import type { CampaignMessage, MessageTranslation, SendLog } from '../types/series'
+import type { CampaignMessage, MessageTranslation, SendLog, QueueStatusItem } from '../types/series'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -22,10 +22,11 @@ const STATUS_CONFIG: Record<string, { label: string; classes: string }> = {
 }
 
 const MSG_STATUS_CONFIG: Record<string, { label: string; classes: string }> = {
-  pending: { label: 'En attente', classes: 'bg-gray-100 text-gray-500' },
-  sending: { label: 'En cours',   classes: 'bg-blue-100 text-blue-600' },
-  sent:    { label: 'Envoyé',     classes: 'bg-green-100 text-green-700' },
-  failed:  { label: 'Échoué',     classes: 'bg-red-100 text-red-600' },
+  pending:        { label: 'En attente',         classes: 'bg-gray-100 text-gray-500' },
+  sending:        { label: 'En cours',           classes: 'bg-blue-100 text-blue-600' },
+  sent:           { label: 'Envoyé',             classes: 'bg-green-100 text-green-700' },
+  failed:         { label: 'Échoué',             classes: 'bg-red-100 text-red-600' },
+  partially_sent: { label: 'Partiellement envoyé', classes: 'bg-orange-100 text-orange-600' },
 }
 
 const LANG_FLAGS: Record<string, string> = {
@@ -39,6 +40,79 @@ function renderWhatsApp(text: string): string {
   return text
     .replace(/\*(.*?)\*/g, '<strong>$1</strong>')
     .replace(/_(.*?)_/g, '<em>$1</em>')
+}
+
+function formatDateShort(dateStr: string) {
+  return new Date(dateStr).toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
+function formatTime(dateStr: string) {
+  return new Date(dateStr).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+}
+
+// ── Queue item component ──────────────────────────────────────────────────────
+
+function QueueItem({ item }: { item: QueueStatusItem }) {
+  const statusCfg = MSG_STATUS_CONFIG[item.status] ?? MSG_STATUS_CONFIG.pending
+  const progress = item.groups_total > 0
+    ? Math.round((item.groups_sent / item.groups_total) * 100)
+    : 0
+
+  const isRescheduled = item.original_scheduled_at && item.original_scheduled_at !== item.scheduled_at
+
+  return (
+    <div className="border border-gray-200 rounded-xl p-4 bg-white">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-gray-800">
+              Message #{item.message_id}
+            </span>
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusCfg.classes}`}>
+              {statusCfg.label}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">{item.series_name}</p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-xs font-medium text-gray-700">
+            {formatDateShort(item.scheduled_at)} {formatTime(item.scheduled_at)}
+          </p>
+          {isRescheduled && (
+            <p className="text-xs text-orange-500 mt-0.5">
+              ↻ init. {formatDateShort(item.original_scheduled_at!)}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div className="mt-3">
+        <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+          <span>{item.groups_sent} / {item.groups_total} groupes envoyés</span>
+          <span className="font-semibold">{progress}%</span>
+        </div>
+        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${
+              item.status === 'partially_sent' ? 'bg-orange-400' :
+              item.status === 'sending' ? 'bg-blue-500' : 'bg-gray-300'
+            }`}
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        {item.groups_remaining > 0 && (
+          <p className="text-xs text-gray-400 mt-1">
+            {item.groups_remaining} groupe{item.groups_remaining > 1 ? 's' : ''} en attente
+          </p>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ── Message accordion ─────────────────────────────────────────────────────────
@@ -125,6 +199,11 @@ function MessageAccordion({ msg, index }: { msg: CampaignMessage; index: number 
             <p className="text-sm text-gray-400 italic">Aucune traduction disponible</p>
           )}
 
+          {msg.original_scheduled_at && msg.original_scheduled_at !== msg.scheduled_at && (
+            <p className="mt-3 text-xs text-orange-500">
+              ↻ Initialement prévu le {new Date(msg.original_scheduled_at).toLocaleString('fr-FR')}, reporté
+            </p>
+          )}
           {msg.sent_at && (
             <p className="mt-3 text-xs text-green-600">
               Envoyé le {new Date(msg.sent_at).toLocaleString('fr-FR')}
@@ -138,7 +217,7 @@ function MessageAccordion({ msg, index }: { msg: CampaignMessage; index: number 
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-type Tab = 'planning' | 'messages' | 'rapport'
+type Tab = 'planning' | 'messages' | 'queue' | 'rapport'
 
 export default function SeriesDetail() {
   const { id } = useParams<{ id: string }>()
@@ -155,6 +234,7 @@ export default function SeriesDetail() {
   const activate = useActivateSeries()
   const deactivate = useDeactivateSeries()
   const translate = useTranslateSeries(id!)
+  const { data: queueStatus } = useQueueStatus()
 
   const { data: logs = [] } = useQuery<SendLog[]>({
     queryKey: ['send-logs', id],
@@ -217,9 +297,20 @@ export default function SeriesDetail() {
   const canResume = series.status === 'paused'
   const canCancel = series.status !== 'completed' && series.status !== 'failed'
 
-  const tabs: { key: Tab; label: string }[] = [
+  // Filter queue items for this series (by ID, not name — names aren't unique)
+  const seriesQueueItems = (queueStatus?.details ?? []).filter(
+    (item) => item.series_id === series.id
+  )
+
+  // Count partially_sent messages in this series
+  const partiallySentCount = (series.messages ?? []).filter(
+    (m) => m.status === 'partially_sent'
+  ).length
+
+  const tabs: { key: Tab; label: string; badge?: number }[] = [
     { key: 'planning',  label: 'Planning' },
     { key: 'messages',  label: 'Messages' },
+    { key: 'queue',     label: "File d'attente", badge: seriesQueueItems.length || undefined },
     { key: 'rapport',   label: 'Rapport' },
   ]
 
@@ -253,6 +344,14 @@ export default function SeriesDetail() {
                 >
                   {statusCfg.label}
                 </span>
+                {partiallySentCount > 0 && (
+                  <>
+                    <span className="text-gray-200">•</span>
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-100 text-orange-600">
+                      {partiallySentCount} msg partiel{partiallySentCount > 1 ? 's' : ''}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -418,17 +517,23 @@ export default function SeriesDetail() {
 
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-5 flex gap-0">
-        {tabs.map(({ key, label }) => (
+        {tabs.map(({ key, label, badge }) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
-            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
               activeTab === key
                 ? 'border-green-500 text-green-700'
                 : 'border-transparent text-gray-500 hover:text-gray-800'
             }`}
           >
+            {key === 'queue' && <Clock size={14} />}
             {label}
+            {badge !== undefined && badge > 0 && (
+              <span className="ml-1 bg-orange-100 text-orange-600 text-xs font-semibold px-1.5 py-0.5 rounded-full">
+                {badge}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -451,6 +556,23 @@ export default function SeriesDetail() {
                 .map((msg, i) => (
                   <MessageAccordion key={msg.id} msg={msg} index={i} />
                 ))
+            )}
+          </div>
+        )}
+
+        {activeTab === 'queue' && (
+          <div>
+            {seriesQueueItems.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <Clock size={32} className="mx-auto mb-3 opacity-50" />
+                <p>Aucun message en file d'attente pour cette série.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {seriesQueueItems.map((item) => (
+                  <QueueItem key={item.message_id} item={item} />
+                ))}
+              </div>
             )}
           </div>
         )}

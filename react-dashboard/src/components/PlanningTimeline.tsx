@@ -10,6 +10,7 @@ const STATUS_ICON: Record<string, { icon: string; color: string }> = {
   failed: { icon: '✕', color: 'bg-red-500 text-white' },
   sending: { icon: '●', color: 'bg-blue-500 text-white animate-pulse' },
   pending: { icon: '○', color: 'bg-gray-200 text-gray-400' },
+  partially_sent: { icon: '◐', color: 'bg-gradient-to-r from-green-500 to-orange-400 text-white' },
 }
 
 function formatDate(dateStr: string) {
@@ -74,6 +75,11 @@ export default function PlanningTimeline({ messages, series }: Props) {
                   msg.translations?.find((t) => t.language === series.source_language) ??
                   msg.translations?.[0]
 
+                // Check if message was rescheduled (carry-over)
+                const isRescheduled =
+                  msg.original_scheduled_at &&
+                  msg.original_scheduled_at !== msg.scheduled_at
+
                 return (
                   <div key={msg.id} className="flex items-start gap-4 pl-0">
                     {/* Icon */}
@@ -90,6 +96,11 @@ export default function PlanningTimeline({ messages, series }: Props) {
                           <span className="text-xs font-semibold text-gray-600">
                             Message {msgIndex}
                           </span>
+                          {status === 'partially_sent' && (
+                            <span className="ml-2 text-xs font-medium text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">
+                              Partiellement envoyé
+                            </span>
+                          )}
                           {primaryTranslation && (
                             <p className="text-sm text-gray-700 mt-0.5 line-clamp-2">
                               {primaryTranslation.content}
@@ -103,6 +114,11 @@ export default function PlanningTimeline({ messages, series }: Props) {
                           <p className="text-xs text-gray-400">{formatTime(msg.scheduled_at)}</p>
                         </div>
                       </div>
+                      {isRescheduled && (
+                        <p className="text-xs text-orange-500 mt-1">
+                          ↻ Initialement prévu le {formatDate(msg.original_scheduled_at!)}, reporté (quota)
+                        </p>
+                      )}
                       {msg.sent_at && (
                         <p className="text-xs text-green-600 mt-1">
                           Envoyé le {formatDate(msg.sent_at)}

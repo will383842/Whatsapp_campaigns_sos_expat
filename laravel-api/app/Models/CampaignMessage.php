@@ -15,12 +15,14 @@ class CampaignMessage extends Model
         'series_id',
         'order_index',
         'scheduled_at',
+        'original_scheduled_at',
         'status',
         'sent_at',
     ];
 
     protected $casts = [
         'scheduled_at' => 'datetime',
+        'original_scheduled_at' => 'datetime',
         'sent_at' => 'datetime',
     ];
 

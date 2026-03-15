@@ -22,8 +22,8 @@ class StatsController extends Controller
             ->whereYear('sent_at', now()->year)
             ->count();
 
-        // Global success rate (all time)
-        $totalLogs = SendLog::count();
+        // Global success rate (all time) — exclude quota_exceeded from denominator
+        $totalLogs = SendLog::whereIn('status', ['sent', 'failed'])->count();
         $sentLogs  = SendLog::where('status', 'sent')->count();
         $successRate = $totalLogs > 0
             ? round(($sentLogs / $totalLogs) * 100, 1)
@@ -44,7 +44,7 @@ class StatsController extends Controller
             ->values();
 
         // Next scheduled send
-        $nextMessage = CampaignMessage::where('status', 'pending')
+        $nextMessage = CampaignMessage::whereIn('status', ['pending', 'partially_sent'])
             ->orderBy('scheduled_at')
             ->first();
 
@@ -73,6 +73,68 @@ class StatsController extends Controller
             'by_language'              => $byLanguage,
             'next_send'                => $nextSend,
             'last_30_days'             => $last30Days,
+        ]);
+    }
+
+    /**
+     * Queue status endpoint — returns all pending, sending, and partially_sent messages
+     * with their send progress details.
+     */
+    public function queueStatus(): JsonResponse
+    {
+        $messages = CampaignMessage::with('series')
+            ->whereIn('status', ['pending', 'sending', 'partially_sent'])
+            ->orderBy('scheduled_at')
+            ->get();
+
+        $details = $messages->map(function ($message) {
+            $groupsSent = SendLog::where('message_id', $message->id)
+                ->where('status', 'sent')
+                ->count();
+
+            // Total target groups for this message's series
+            $series = $message->series;
+            $groupsTotal = 0;
+
+            if ($series) {
+                if ($series->targeting_mode === 'by_language') {
+                    $groupsTotal = Group::whereIn('language', $series->target_languages ?? [])
+                        ->where('is_active', true)
+                        ->count();
+                } elseif ($series->targeting_mode === 'by_group') {
+                    $groupsTotal = $series->seriesTargets()->count();
+                } else {
+                    // hybrid
+                    $groupsTotal = Group::where(function ($q) use ($series) {
+                        $q->whereIn('language', $series->target_languages ?? [])
+                          ->orWhereIn('id', $series->seriesTargets()->pluck('group_id'));
+                    })->where('is_active', true)->distinct()->count();
+                }
+            }
+
+            $groupsRemaining = max(0, $groupsTotal - $groupsSent);
+
+            return [
+                'message_id'           => $message->id,
+                'series_id'            => $message->series_id,
+                'series_name'          => $series?->name ?? '—',
+                'status'               => $message->status,
+                'original_scheduled_at' => $message->original_scheduled_at?->toIso8601String(),
+                'scheduled_at'         => $message->scheduled_at->toIso8601String(),
+                'groups_sent'          => $groupsSent,
+                'groups_remaining'     => $groupsRemaining,
+                'groups_total'         => $groupsTotal,
+            ];
+        });
+
+        $statusCounts = $messages->groupBy('status');
+
+        return response()->json([
+            'pending_messages'        => $statusCounts->get('pending', collect())->count(),
+            'partially_sent_messages' => $statusCounts->get('partially_sent', collect())->count(),
+            'sending_messages'        => $statusCounts->get('sending', collect())->count(),
+            'next_scheduled_at'       => $messages->first()?->scheduled_at?->toIso8601String(),
+            'details'                 => $details->values(),
         ]);
     }
 }

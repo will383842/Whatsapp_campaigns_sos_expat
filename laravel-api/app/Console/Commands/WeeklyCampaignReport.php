@@ -88,15 +88,20 @@ class WeeklyCampaignReport extends Command
                 $sent = $series->sent_messages ?? 0;
                 $total = $series->total_messages ?? 0;
                 $pending = $series->messages->where('status', 'pending')->count();
+                $partiallySent = $series->messages->where('status', 'partially_sent')->count();
                 $progress = $total > 0 ? round(($sent / $total) * 100) : 0;
 
                 $nextMessage = $series->messages
-                    ->where('status', 'pending')
+                    ->whereIn('status', ['pending', 'partially_sent'])
                     ->sortBy('scheduled_at')
                     ->first();
 
                 $lines[] = "{$emoji} <b>{$series->name}</b>";
                 $lines[] = "   Statut : {$statusLabel} | {$sent}/{$total} envoyés ({$progress}%)";
+
+                if ($partiallySent > 0) {
+                    $lines[] = "   \u{1F7E0} {$partiallySent} message(s) partiellement envoyé(s) (quota)";
+                }
 
                 if ($pending > 0 && $nextMessage) {
                     $nextDate = \Carbon\Carbon::parse($nextMessage->scheduled_at)
