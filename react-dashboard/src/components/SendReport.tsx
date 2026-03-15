@@ -33,11 +33,14 @@ export default function SendReport({ series, logs, groups }: Props) {
     )
   }
 
-  // Determine targeted groups based on targeting mode
+  // Determine targeted groups based on targeting mode (respecting category filter)
+  const matchesCat = (g: Group) =>
+    !series.target_categories || series.target_categories.length === 0 || series.target_categories.includes(g.category as any)
+
   let targetedGroups: Group[] = []
   if (series.targeting_mode === 'by_language' && series.target_languages) {
     targetedGroups = groups.filter(
-      (g) => g.is_active && series.target_languages!.includes(g.language)
+      (g) => g.is_active && series.target_languages!.includes(g.language) && matchesCat(g)
     )
   } else if (series.targeting_mode === 'by_group') {
     const logGroupIds = new Set(logs.map((l) => l.group_id))

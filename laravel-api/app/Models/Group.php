@@ -12,6 +12,7 @@ class Group extends Model
         'name',
         'community_name',
         'language',
+        'category',
         'country',
         'continent',
         'member_count',

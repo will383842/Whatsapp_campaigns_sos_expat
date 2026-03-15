@@ -97,18 +97,26 @@ class StatsController extends Controller
             $groupsTotal = 0;
 
             if ($series) {
+                $categories = $series->target_categories;
+                $applyCategories = fn ($query) => ! empty($categories)
+                    ? $query->whereIn('category', $categories)
+                    : $query;
+
                 if ($series->targeting_mode === 'by_language') {
-                    $groupsTotal = Group::whereIn('language', $series->target_languages ?? [])
-                        ->where('is_active', true)
-                        ->count();
+                    $groupsTotal = $applyCategories(
+                        Group::whereIn('language', $series->target_languages ?? [])
+                            ->where('is_active', true)
+                    )->count();
                 } elseif ($series->targeting_mode === 'by_group') {
                     $groupsTotal = $series->seriesTargets()->count();
                 } else {
                     // hybrid
-                    $groupsTotal = Group::where(function ($q) use ($series) {
-                        $q->whereIn('language', $series->target_languages ?? [])
-                          ->orWhereIn('id', $series->seriesTargets()->pluck('group_id'));
-                    })->where('is_active', true)->distinct()->count();
+                    $groupsTotal = $applyCategories(
+                        Group::where(function ($q) use ($series) {
+                            $q->whereIn('language', $series->target_languages ?? [])
+                              ->orWhereIn('id', $series->seriesTargets()->pluck('group_id'));
+                        })->where('is_active', true)->distinct()
+                    )->count();
                 }
             }
 

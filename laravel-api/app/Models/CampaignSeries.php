@@ -20,6 +20,7 @@ class CampaignSeries extends Model
         'status',
         'targeting_mode',
         'target_languages',
+        'target_categories',
         'send_days',
         'messages_per_week',
         'send_time',
@@ -36,6 +37,7 @@ class CampaignSeries extends Model
 
     protected $casts = [
         'target_languages' => 'array',
+        'target_categories' => 'array',
         'send_days' => 'array',
         'starts_at' => 'date',
         'ends_at' => 'date',

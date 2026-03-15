@@ -148,18 +148,27 @@ class SendMessageJob implements ShouldQueue
             ->pluck('group_id')
             ->toArray();
 
+        // Helper: apply category filter to a query builder if target_categories is set
+        $categories = $series->target_categories;
+        $applyCategories = fn ($query) => ! empty($categories)
+            ? $query->whereIn('category', $categories)
+            : $query;
+
         // Resolve group collection
         $groups = match ($targetingMode) {
-            'by_language' => Group::whereIn('language', $series->target_languages ?? [])
-                ->where('is_active', true)
-                ->get(),
+            'by_language' => $applyCategories(
+                Group::whereIn('language', $series->target_languages ?? [])
+                    ->where('is_active', true)
+            )->get(),
 
             'by_group' => $series->seriesTargets->map->group->filter(),
 
-            'hybrid' => Group::where(function ($q) use ($series) {
-                $q->whereIn('language', $series->target_languages ?? [])
-                  ->orWhereIn('id', $series->seriesTargets->pluck('group_id'));
-            })->where('is_active', true)->distinct()->get(),
+            'hybrid' => $applyCategories(
+                Group::where(function ($q) use ($series) {
+                    $q->whereIn('language', $series->target_languages ?? [])
+                      ->orWhereIn('id', $series->seriesTargets->pluck('group_id'));
+                })->where('is_active', true)->distinct()
+            )->get(),
 
             default => collect(),
         };

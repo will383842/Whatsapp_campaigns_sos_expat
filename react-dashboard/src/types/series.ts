@@ -11,12 +11,15 @@ export interface User {
   locale: string
 }
 
+export type GroupCategory = 'chatter' | 'client' | 'avocat' | 'blogger' | 'influencer' | 'group_admin' | 'expatrie_aidant'
+
 export interface Group {
   id: number
   whatsapp_group_id: string
   name: string
   community_name: string | null
   language: string
+  category: GroupCategory | null
   country: string | null
   continent: string | null
   member_count: number
@@ -51,6 +54,7 @@ export interface CampaignSeries {
   status: SeriesStatus
   targeting_mode: TargetingMode
   target_languages: string[] | null
+  target_categories: GroupCategory[] | null
   send_days: string[] | null
   messages_per_week: number | null
   send_time: string

@@ -31,7 +31,17 @@ const MSG_STATUS_CONFIG: Record<string, { label: string; classes: string }> = {
 
 const LANG_FLAGS: Record<string, string> = {
   fr: '🇫🇷', en: '🇬🇧', de: '🇩🇪', pt: '🇧🇷',
-  es: '🇪🇸', it: '🇮🇹', nl: '🇳🇱', ar: '🇸🇦', zh: '🇨🇳',
+  es: '🇪🇸', it: '🇮🇹', nl: '🇳🇱', ar: '🇸🇦', zh: '🇨🇳', hi: '🇮🇳', ru: '🇷🇺',
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  chatter: 'Chatters',
+  client: 'Clients',
+  avocat: 'Avocats',
+  blogger: 'Bloggers',
+  influencer: 'Influencers',
+  group_admin: 'Group Admins',
+  expatrie_aidant: 'Expatriés Aidants',
 }
 
 // ── WhatsApp formatting renderer ──────────────────────────────────────────────
@@ -274,10 +284,13 @@ export default function SeriesDetail() {
       ? Math.round((series.sent_messages / series.total_messages) * 100)
       : 0
 
-  // Compute targeted groups
+  // Compute targeted groups (respecting both language AND category filters)
+  const matchesCategories = (g: typeof groups[0]) =>
+    !series.target_categories || series.target_categories.length === 0 || series.target_categories.includes(g.category as any)
+
   const targetedGroups = (() => {
     if (series.targeting_mode === 'by_language' && series.target_languages) {
-      return groups.filter((g) => g.is_active && series.target_languages!.includes(g.language))
+      return groups.filter((g) => g.is_active && series.target_languages!.includes(g.language) && matchesCategories(g))
     }
     if (series.targeting_mode === 'by_group' && series.series_targets) {
       return series.series_targets.map((t) => t.group).filter(Boolean)
@@ -285,7 +298,7 @@ export default function SeriesDetail() {
     if (series.targeting_mode === 'hybrid') {
       const targetGroupIds = new Set((series.series_targets ?? []).map((t) => t.group_id))
       return groups.filter(
-        (g) => g.is_active && (series.target_languages?.includes(g.language) || targetGroupIds.has(g.id))
+        (g) => g.is_active && (series.target_languages?.includes(g.language) || targetGroupIds.has(g.id)) && matchesCategories(g)
       )
     }
     return []
@@ -470,6 +483,12 @@ export default function SeriesDetail() {
             <span>
               <span className="font-medium text-gray-600">Langues ciblées :</span>{' '}
               {series.target_languages.map((l) => LANG_FLAGS[l] ?? l).join(' ')}
+            </span>
+          )}
+          {series.target_categories && series.target_categories.length > 0 && (
+            <span>
+              <span className="font-medium text-gray-600">Catégories :</span>{' '}
+              {series.target_categories.map((c) => CATEGORY_LABELS[c] ?? c).join(', ')}
             </span>
           )}
         </div>

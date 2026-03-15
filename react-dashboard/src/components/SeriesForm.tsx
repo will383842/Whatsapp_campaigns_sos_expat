@@ -45,6 +45,7 @@ interface FormData {
   notes: string
   targeting_mode: 'by_language' | 'by_group' | 'hybrid'
   target_languages: string[]
+  target_categories: string[]
   target_groups: number[]
   messages: MessageDraft[]
   translation_mode: 'auto' | 'manual'
@@ -151,6 +152,7 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
     notes: initialData?.notes ?? '',
     targeting_mode: initialData?.targeting_mode ?? 'by_language',
     target_languages: initialData?.target_languages ?? [],
+    target_categories: initialData?.target_categories ?? [],
     target_groups: [],
     messages: [],
     translation_mode: initialData?.translation_mode ?? 'auto',
@@ -218,14 +220,16 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
 
   const countTargetedGroups = () => {
     const active = groups.filter((g) => g.is_active)
+    const matchesCat = (g: typeof active[0]) =>
+      form.target_categories.length === 0 || form.target_categories.includes(g.category ?? '')
     if (form.targeting_mode === 'by_language') {
-      return active.filter((g) => form.target_languages.includes(g.language)).length
+      return active.filter((g) => form.target_languages.includes(g.language) && matchesCat(g)).length
     }
     if (form.targeting_mode === 'by_group') {
       return form.target_groups.length
     }
     // hybrid
-    const byLang = active.filter((g) => form.target_languages.includes(g.language)).map((g) => g.id)
+    const byLang = active.filter((g) => form.target_languages.includes(g.language) && matchesCat(g)).map((g) => g.id)
     const merged = new Set([...byLang, ...form.target_groups])
     return merged.size
   }
@@ -278,6 +282,7 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
       notes: form.notes || undefined,
       targeting_mode: form.targeting_mode,
       target_languages: form.targeting_mode !== 'by_group' ? form.target_languages : undefined,
+      target_categories: form.target_categories.length > 0 ? form.target_categories : undefined,
       send_days: form.type === 'drip' ? form.send_days : undefined,
       send_time: form.send_time,
       timezone: form.timezone,
@@ -442,6 +447,50 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
               onChange={(langs) => set('target_languages', langs)}
               groups={groups}
             />
+          )}
+
+          {/* Category filter — optional, filters groups by type */}
+          {form.targeting_mode !== 'by_group' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Catégories de groupes <span className="text-gray-400 font-normal">(optionnel — toutes si vide)</span>
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: 'chatter', label: 'Chatters' },
+                  { value: 'client', label: 'Clients' },
+                  { value: 'avocat', label: 'Avocats' },
+                  { value: 'blogger', label: 'Bloggers' },
+                  { value: 'influencer', label: 'Influencers' },
+                  { value: 'group_admin', label: 'Group Admins' },
+                  { value: 'expatrie_aidant', label: 'Expatriés Aidants' },
+                ].map(({ value, label }) => {
+                  const isSelected = form.target_categories.includes(value)
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => {
+                        const next = isSelected
+                          ? form.target_categories.filter((c) => c !== value)
+                          : [...form.target_categories, value]
+                        set('target_categories', next)
+                      }}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                        isSelected
+                          ? 'bg-green-100 border-green-400 text-green-700'
+                          : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-gray-400 mt-1.5">
+                {countTargetedGroups()} groupe(s) ciblé(s)
+              </p>
+            </div>
           )}
 
           {(form.targeting_mode === 'by_group' || form.targeting_mode === 'hybrid') && (
@@ -704,6 +753,15 @@ export default function SeriesForm({ onSubmit, initialData, groups, isTranslatin
                   : `Hybride : ${form.target_languages.length} langue(s) + ${form.target_groups.length} groupe(s)`
               }
             />
+            {form.target_categories.length > 0 && (
+              <SummaryRow
+                label="Catégories"
+                value={form.target_categories.map((c) => {
+                  const labels: Record<string, string> = { chatter: 'Chatters', client: 'Clients', avocat: 'Avocats', blogger: 'Bloggers', influencer: 'Influencers', group_admin: 'Group Admins', expatrie_aidant: 'Expatriés Aidants' }
+                  return labels[c] ?? c
+                }).join(', ')}
+              />
+            )}
             <SummaryRow label="Groupes ciblés" value={`${countTargetedGroups()} groupe(s)`} />
             <SummaryRow label="Nombre de messages" value={`${form.messages.length} message(s)`} />
             <SummaryRow
