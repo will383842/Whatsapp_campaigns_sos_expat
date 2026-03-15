@@ -2,11 +2,11 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
-import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock } from 'lucide-react'
+import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
 import SendReport from '../components/SendReport'
 import { useGroups } from '../hooks/useSeries'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../api/client'
 import type { CampaignMessage, MessageTranslation, SendLog, QueueStatusItem } from '../types/series'
 
@@ -127,33 +127,68 @@ function QueueItem({ item }: { item: QueueStatusItem }) {
 
 // ── Message accordion ─────────────────────────────────────────────────────────
 
-function MessageAccordion({ msg, index }: { msg: CampaignMessage; index: number }) {
+function MessageAccordion({ msg, index, seriesId, isAdmin }: { msg: CampaignMessage; index: number; seriesId: number; isAdmin: boolean }) {
   const [open, setOpen] = useState(false)
   const [activeLang, setActiveLang] = useState<string>(
     msg.translations?.[0]?.language ?? ''
   )
+  const [editing, setEditing] = useState(false)
+  const [editContent, setEditContent] = useState('')
+  const [editDate, setEditDate] = useState('')
+  const qc = useQueryClient()
+
+  const isEditable = msg.status === 'pending' || msg.status === 'partially_sent'
+  const isSent = msg.status === 'sent' || msg.status === 'failed'
+
+  const updateMsg = useMutation({
+    mutationFn: async (data: { scheduled_at?: string; translations?: { language: string; content: string }[] }) => {
+      const res = await api.put(`/api/series/${seriesId}/messages/${msg.id}`, data)
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['series', String(seriesId)] })
+      setEditing(false)
+    },
+  })
 
   const st = MSG_STATUS_CONFIG[msg.status] ?? MSG_STATUS_CONFIG.pending
   const activeTranslation: MessageTranslation | undefined =
     msg.translations?.find((t) => t.language === activeLang) ?? msg.translations?.[0]
 
+  const startEditing = () => {
+    setEditContent(activeTranslation?.content ?? '')
+    setEditDate(msg.scheduled_at ? new Date(msg.scheduled_at).toISOString().slice(0, 16) : '')
+    setEditing(true)
+  }
+
+  const saveEdits = () => {
+    const payload: { scheduled_at?: string; translations?: { language: string; content: string }[] } = {}
+    if (editDate) payload.scheduled_at = new Date(editDate).toISOString()
+    if (editContent && activeLang) payload.translations = [{ language: activeLang, content: editContent }]
+    updateMsg.mutate(payload)
+  }
+
   return (
-    <div className="border border-gray-200 rounded-xl overflow-hidden">
+    <div className={`border rounded-xl overflow-hidden transition-opacity ${
+      isSent ? 'border-gray-100 opacity-50' : 'border-gray-200'
+    }`}>
       {/* Header */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+        className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+          isSent ? 'bg-gray-50' : 'hover:bg-gray-50'
+        }`}
       >
-        <span className="text-sm font-semibold text-gray-600 w-24 shrink-0">
+        <span className={`text-sm font-semibold w-24 shrink-0 ${isSent ? 'text-gray-400' : 'text-gray-600'}`}>
           Message {index + 1}
         </span>
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${st.classes}`}>
           {st.label}
         </span>
-        <span className="text-xs text-gray-400 flex-1 truncate">
+        <span className={`text-xs flex-1 truncate ${isSent ? 'text-gray-300' : 'text-gray-400'}`}>
           {msg.translations?.[0]?.content?.slice(0, 80) ?? '—'}
         </span>
-        <span className="text-xs text-gray-400 shrink-0">
+        <span className={`text-xs shrink-0 ${isSent ? 'text-gray-300' : 'text-gray-400'}`}>
           {new Date(msg.scheduled_at).toLocaleDateString('fr-FR', {
             day: 'numeric',
             month: 'short',
@@ -164,7 +199,35 @@ function MessageAccordion({ msg, index }: { msg: CampaignMessage; index: number 
 
       {/* Expanded */}
       {open && (
-        <div className="border-t border-gray-100 bg-gray-50 px-4 py-4">
+        <div className={`border-t border-gray-100 px-4 py-4 ${isSent ? 'bg-gray-50' : 'bg-gray-50'}`}>
+          {/* Schedule edit */}
+          {editing ? (
+            <div className="mb-3">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Date et heure d'envoi</label>
+              <input
+                type="datetime-local"
+                value={editDate}
+                onChange={(e) => setEditDate(e.target.value)}
+                className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+          ) : (
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs text-gray-500">
+                Prévu le {new Date(msg.scheduled_at).toLocaleString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
+              </p>
+              {isAdmin && isEditable && (
+                <button
+                  onClick={startEditing}
+                  className="flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium"
+                >
+                  <Pencil size={12} />
+                  Modifier
+                </button>
+              )}
+            </div>
+          )}
+
           {msg.translations && msg.translations.length > 0 ? (
             <>
               {/* Language tabs */}
@@ -172,7 +235,7 @@ function MessageAccordion({ msg, index }: { msg: CampaignMessage; index: number 
                 {msg.translations.map((t) => (
                   <button
                     key={t.language}
-                    onClick={() => setActiveLang(t.language)}
+                    onClick={() => { setActiveLang(t.language); if (editing) setEditContent(t.content) }}
                     className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                       activeLang === t.language
                         ? 'bg-green-600 text-white'
@@ -184,8 +247,15 @@ function MessageAccordion({ msg, index }: { msg: CampaignMessage; index: number 
                 ))}
               </div>
 
-              {/* Content */}
-              {activeTranslation && (
+              {/* Content — editable or read-only */}
+              {editing ? (
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  rows={8}
+                  className="w-full text-sm border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-green-500 font-mono"
+                />
+              ) : activeTranslation ? (
                 <div className="bg-white border border-gray-200 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
@@ -203,10 +273,30 @@ function MessageAccordion({ msg, index }: { msg: CampaignMessage; index: number 
                     }}
                   />
                 </div>
-              )}
+              ) : null}
             </>
           ) : (
             <p className="text-sm text-gray-400 italic">Aucune traduction disponible</p>
+          )}
+
+          {/* Save / Cancel buttons */}
+          {editing && (
+            <div className="flex items-center gap-2 mt-3">
+              <button
+                onClick={saveEdits}
+                disabled={updateMsg.isPending}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+              >
+                {updateMsg.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                Enregistrer
+              </button>
+              <button
+                onClick={() => setEditing(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+            </div>
           )}
 
           {msg.original_scheduled_at && msg.original_scheduled_at !== msg.scheduled_at && (
@@ -573,7 +663,7 @@ export default function SeriesDetail() {
               [...(series.messages ?? [])]
                 .sort((a, b) => a.order_index - b.order_index)
                 .map((msg, i) => (
-                  <MessageAccordion key={msg.id} msg={msg} index={i} />
+                  <MessageAccordion key={msg.id} msg={msg} index={i} seriesId={series.id} isAdmin={isAdmin} />
                 ))
             )}
           </div>

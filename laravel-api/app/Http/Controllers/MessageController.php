@@ -67,24 +67,42 @@ class MessageController extends Controller
     }
 
     /**
-     * Update a message (only if pending).
+     * Update a message (only if pending or partially_sent — not yet fully sent).
+     * Allows editing content, schedule, and translations even if the series is active.
      */
     public function update(Request $request, int $seriesId, int $messageId): JsonResponse
     {
         $message = CampaignMessage::where('series_id', $seriesId)->findOrFail($messageId);
 
-        if ($message->status !== 'pending') {
+        if (! in_array($message->status, ['pending', 'partially_sent'], true)) {
             return response()->json([
-                'message' => 'Only pending messages can be updated.',
+                'message' => 'Seuls les messages en attente peuvent être modifiés.',
             ], 422);
         }
 
         $validated = $request->validate([
             'order_index'  => ['sometimes', 'integer', 'min:0'],
             'scheduled_at' => ['sometimes', 'date'],
+            'translations' => ['sometimes', 'array'],
+            'translations.*.language'      => ['required', 'string', 'max:10'],
+            'translations.*.content'       => ['required', 'string'],
+            'translations.*.translated_by' => ['nullable', Rule::in(['manual', 'gpt4o'])],
         ]);
 
-        $message->update($validated);
+        $message->update(collect($validated)->only(['order_index', 'scheduled_at'])->toArray());
+
+        // Update translations if provided
+        if (isset($validated['translations'])) {
+            foreach ($validated['translations'] as $t) {
+                $message->translations()->updateOrCreate(
+                    ['language' => $t['language']],
+                    [
+                        'content'       => $t['content'],
+                        'translated_by' => $t['translated_by'] ?? 'manual',
+                    ]
+                );
+            }
+        }
 
         return response()->json($message->fresh('translations'));
     }
