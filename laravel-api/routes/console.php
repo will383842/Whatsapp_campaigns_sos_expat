@@ -38,4 +38,4 @@ Schedule::command('campaigns:weekly-report')
 // Reset daily sent counters for WhatsApp numbers at midnight UTC.
 Schedule::call(function () {
     WhatsAppNumber::query()->update(['daily_sent' => 0]);
-})->dailyAt('00:00')->withoutOverlapping();
+})->name('whatsapp-numbers:reset-daily')->dailyAt('00:00')->withoutOverlapping();
