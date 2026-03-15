@@ -2,13 +2,13 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
-import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil } from 'lucide-react'
+import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil, Plus, X } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
 import SendReport from '../components/SendReport'
 import { useGroups } from '../hooks/useSeries'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../api/client'
-import type { CampaignMessage, MessageTranslation, SendLog, QueueStatusItem } from '../types/series'
+import type { CampaignMessage, CampaignSeries, MessageTranslation, SendLog, QueueStatusItem, Group } from '../types/series'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -62,6 +62,183 @@ function formatDateShort(dateStr: string) {
 
 function formatTime(dateStr: string) {
   return new Date(dateStr).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+}
+
+// ── Targeted groups section with editing ───────────────────────────────────────
+
+function TargetedGroupsSection({
+  targetedGroups, totalMembers, allGroups, series, isAdmin, showGroups, setShowGroups,
+}: {
+  targetedGroups: Group[]
+  totalMembers: number
+  allGroups: Group[]
+  series: CampaignSeries
+  isAdmin: boolean
+  showGroups: boolean
+  setShowGroups: (fn: (v: boolean) => boolean) => void
+}) {
+  const [editingTargets, setEditingTargets] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [search, setSearch] = useState('')
+  const qc = useQueryClient()
+
+  const updateTargets = useMutation({
+    mutationFn: async (groupIds: number[]) => {
+      const res = await api.put(`/api/series/${series.id}`, {
+        targeting_mode: 'by_group',
+        target_groups: groupIds,
+      })
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['series', String(series.id)] })
+      setEditingTargets(false)
+    },
+  })
+
+  const startEditing = () => {
+    // Initialize with current targets
+    if (series.targeting_mode === 'by_group' && series.series_targets) {
+      setSelectedIds(new Set(series.series_targets.map((t) => t.group_id)))
+    } else {
+      setSelectedIds(new Set(targetedGroups.map((g) => g.id)))
+    }
+    setSearch('')
+    setEditingTargets(true)
+  }
+
+  const toggleGroup = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const saveTargets = () => {
+    updateTargets.mutate([...selectedIds])
+  }
+
+  const filteredGroups = allGroups.filter((g) =>
+    g.is_active && (
+      !search ||
+      g.name.toLowerCase().includes(search.toLowerCase()) ||
+      (g.community_name ?? '').toLowerCase().includes(search.toLowerCase()) ||
+      g.language.toLowerCase().includes(search.toLowerCase())
+    )
+  )
+
+  if (editingTargets) {
+    return (
+      <div className="mt-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-700">Modifier les groupes ciblés</h3>
+          <span className="text-xs text-green-600 font-medium">{selectedIds.size} sélectionné(s)</span>
+        </div>
+
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Rechercher un groupe..."
+          className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+        />
+
+        <div className="max-h-72 overflow-y-auto border border-gray-200 rounded-xl">
+          {filteredGroups.map((g) => {
+            const checked = selectedIds.has(g.id)
+            return (
+              <label
+                key={g.id}
+                className={`flex items-center gap-3 px-3 py-2 cursor-pointer text-xs hover:bg-gray-50 border-b border-gray-50 ${
+                  checked ? 'bg-green-50' : ''
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleGroup(g.id)}
+                  className="rounded border-gray-300 text-green-600 focus:ring-green-500"
+                />
+                <span className="flex-1 text-gray-800">{g.name}</span>
+                <span className="text-gray-400">{g.community_name ?? '—'}</span>
+                <span>{LANG_FLAGS[g.language] ?? g.language}</span>
+                <span className="text-gray-400 w-10 text-right">{g.member_count}</span>
+              </label>
+            )
+          })}
+        </div>
+
+        <div className="flex items-center gap-2 mt-3">
+          <button
+            onClick={saveTargets}
+            disabled={updateTargets.isPending || selectedIds.size === 0}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+          >
+            {updateTargets.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            Enregistrer ({selectedIds.size} groupes)
+          </button>
+          <button
+            onClick={() => setEditingTargets(false)}
+            className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            Annuler
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setShowGroups((v: boolean) => !v)}
+          className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+        >
+          <Users size={15} className="text-green-600" />
+          <span>{targetedGroups.length} groupes ciblés</span>
+          <span className="text-xs text-gray-400">({totalMembers.toLocaleString('fr-FR')} membres)</span>
+          {showGroups ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        {isAdmin && (
+          <button
+            onClick={startEditing}
+            className="flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium ml-2"
+          >
+            <Pencil size={12} />
+            Modifier
+          </button>
+        )}
+      </div>
+
+      {showGroups && targetedGroups.length > 0 && (
+        <div className="mt-3 max-h-64 overflow-y-auto border border-gray-100 rounded-xl">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 sticky top-0">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium text-gray-500">Groupe</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-500">Communauté</th>
+                <th className="text-center px-3 py-2 font-medium text-gray-500">Langue</th>
+                <th className="text-right px-3 py-2 font-medium text-gray-500">Membres</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {targetedGroups.map((g) => (
+                <tr key={g.id} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 text-gray-800">{g.name}</td>
+                  <td className="px-3 py-2 text-gray-400">{g.community_name ?? '—'}</td>
+                  <td className="px-3 py-2 text-center">{LANG_FLAGS[g.language] ?? g.language}</td>
+                  <td className="px-3 py-2 text-right text-gray-600">{g.member_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── Queue item component ──────────────────────────────────────────────────────
@@ -584,44 +761,15 @@ export default function SeriesDetail() {
         </div>
 
         {/* Targeted groups section */}
-        {targetedGroups.length > 0 && (
-          <div className="mt-4">
-            <button
-              onClick={() => setShowGroups((v) => !v)}
-              className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-            >
-              <Users size={15} className="text-green-600" />
-              <span>{targetedGroups.length} groupes ciblés</span>
-              <span className="text-xs text-gray-400">({totalMembers.toLocaleString('fr-FR')} membres)</span>
-              {showGroups ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-
-            {showGroups && (
-              <div className="mt-3 max-h-64 overflow-y-auto border border-gray-100 rounded-xl">
-                <table className="w-full text-xs">
-                  <thead className="bg-gray-50 sticky top-0">
-                    <tr>
-                      <th className="text-left px-3 py-2 font-medium text-gray-500">Groupe</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-500">Communauté</th>
-                      <th className="text-center px-3 py-2 font-medium text-gray-500">Langue</th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-500">Membres</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {targetedGroups.map((g) => (
-                      <tr key={g.id} className="hover:bg-gray-50">
-                        <td className="px-3 py-2 text-gray-800">{g.name}</td>
-                        <td className="px-3 py-2 text-gray-400">{g.community_name ?? '—'}</td>
-                        <td className="px-3 py-2 text-center">{LANG_FLAGS[g.language] ?? g.language}</td>
-                        <td className="px-3 py-2 text-right text-gray-600">{g.member_count}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
+        <TargetedGroupsSection
+          targetedGroups={targetedGroups}
+          totalMembers={totalMembers}
+          allGroups={groups}
+          series={series}
+          isAdmin={isAdmin}
+          showGroups={showGroups}
+          setShowGroups={setShowGroups}
+        />
       </div>
 
       {/* Tabs */}

@@ -101,15 +101,20 @@ class SeriesController extends Controller
     }
 
     /**
-     * Update a series (only when in draft status).
+     * Update a series. Targeting fields (languages, categories, groups) can be
+     * changed at any time (draft, scheduled, active). Other fields only in draft.
      */
     public function update(Request $request, int $id): JsonResponse
     {
         $series = CampaignSeries::findOrFail($id);
 
-        if ($series->status !== 'draft') {
+        // Targeting-only fields are always editable
+        $targetingFields = ['target_languages', 'target_categories', 'target_groups', 'targeting_mode'];
+        $hasNonTargetingFields = count(array_diff(array_keys($request->all()), $targetingFields)) > 0;
+
+        if ($series->status !== 'draft' && $hasNonTargetingFields) {
             return response()->json([
-                'message' => 'Only draft series can be updated.',
+                'message' => 'Seuls le ciblage (langues, catégories, groupes) peut être modifié sur une série active.',
             ], 422);
         }
 
@@ -121,6 +126,8 @@ class SeriesController extends Controller
             'target_languages.*' => ['string', Rule::in(['fr', 'en', 'de', 'pt', 'es', 'it', 'nl', 'ar', 'zh', 'hi', 'ru'])],
             'target_categories' => ['nullable', 'array'],
             'target_categories.*' => ['string', Rule::in(['chatter', 'client', 'avocat', 'blogger', 'influencer', 'group_admin', 'expatrie_aidant'])],
+            'target_groups'    => ['sometimes', 'array'],
+            'target_groups.*'  => ['integer', 'exists:groups,id'],
             'send_days'        => ['nullable', 'array'],
             'send_days.*'      => ['string', Rule::in(['monday','tuesday','wednesday','thursday','friday','saturday','sunday'])],
             'send_time'        => ['nullable', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
@@ -136,9 +143,21 @@ class SeriesController extends Controller
             $validated['messages_per_week'] = count($validated['send_days']);
         }
 
+        // Sync series_targets if target_groups provided
+        if (isset($validated['target_groups'])) {
+            $series->seriesTargets()->delete();
+            foreach (array_unique($validated['target_groups']) as $groupId) {
+                \App\Models\SeriesTarget::create([
+                    'series_id' => $series->id,
+                    'group_id'  => (int) $groupId,
+                ]);
+            }
+            unset($validated['target_groups']); // Not a column on campaign_series
+        }
+
         $series->update($validated);
 
-        return response()->json($series->fresh('createdBy:id,name'));
+        return response()->json($series->fresh(['createdBy:id,name', 'seriesTargets.group']));
     }
 
     /**
