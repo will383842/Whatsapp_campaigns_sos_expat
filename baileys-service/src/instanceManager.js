@@ -424,14 +424,52 @@ async function connectInstance(instance) {
           instance.welcomeRegistered = true;
         }
 
-        // Heartbeat
+        // Anti-zombie heartbeat: every 5 min, verify the session is REALLY functional
+        // by doing a real WhatsApp operation (groupFetchAllParticipating).
+        // If it fails, the session is a zombie → auto-purge auth + alert + new QR.
         if (instance.heartbeatInterval) clearInterval(instance.heartbeatInterval);
-        instance.heartbeatInterval = setInterval(() => {
-          if (!instance.connected && !instance.isReconnecting && instance.status !== 'banned') {
-            log.warn({ slug }, 'Heartbeat: disconnected, reconnecting...');
-            connectInstance(instance);
+        instance.heartbeatInterval = setInterval(async () => {
+          if (!instance.connected) {
+            if (!instance.isReconnecting && instance.status !== 'banned') {
+              log.warn({ slug }, 'Heartbeat: disconnected, reconnecting...');
+              connectInstance(instance);
+            }
+            return;
           }
-        }, 60_000);
+
+          // Real connectivity test (zombie detection)
+          try {
+            const timeout = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('timeout')), 10_000)
+            );
+            const check = instance.socket.groupFetchAllParticipating();
+            await Promise.race([check, timeout]);
+            // Success — session is real
+          } catch (err) {
+            log.error({ slug, err: err.message }, 'ZOMBIE SESSION DETECTED by heartbeat — auto-purging auth');
+            instance.connected = false;
+            instance.status = 'disconnected';
+            instance.lastError = 'zombie_session (auto-purged)';
+
+            sendTelegramAlert(
+              `🧟 <b>Session zombie détectée : [${slug}]</b>\n\n` +
+              `Le numéro ${instance.phone} semblait connecté mais ne fonctionnait PAS.\n` +
+              `→ Auth purgée automatiquement.\n` +
+              `→ Un nouveau QR code est prêt.\n\n` +
+              `👉 <a href="https://whatsapp.life-expat.com/whatsapp/numbers">Scanner le QR</a>`,
+            );
+
+            // Close socket, clear auth, reconnect (will show QR)
+            if (instance.socket) {
+              try { instance.socket.end(undefined); } catch { /* ignore */ }
+              instance.socket = null;
+            }
+            instance.welcomeRegistered = false;
+            clearAuthForInstance(instance);
+            startDisconnectReminder(instance);
+            setTimeout(() => connectInstance(instance), 3000);
+          }
+        }, 5 * 60_000); // every 5 minutes
       }
 
       if (connection === 'connecting') {
