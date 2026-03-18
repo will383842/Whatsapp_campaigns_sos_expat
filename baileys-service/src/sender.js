@@ -103,10 +103,36 @@ async function reportCampaignComplete({ message_id, total, sent_count, failed_co
   }
 }
 
+/**
+ * Verify the WhatsApp connection is REALLY functional (not a zombie session).
+ * A zombie session reports connected=true but can't actually interact with WA.
+ * We test by fetching metadata of the target group — if this times out or fails,
+ * the connection is broken even if Baileys thinks it's connected.
+ */
+async function verifyConnectionIsReal(sock, testJid) {
+  try {
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Connection verification timed out (8s)')), 8000)
+    );
+    const check = sock.groupMetadata(testJid);
+    const meta = await Promise.race([check, timeout]);
+    return !!meta?.id;
+  } catch (err) {
+    logger.error({ testJid, err: err.message }, 'Connection verification FAILED — zombie session detected');
+    return false;
+  }
+}
+
 async function sendWithRetry(sock, jid, content, maxRetries = 2) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      await sock.sendMessage(jid, { text: content });
+      const result = await sock.sendMessage(jid, { text: content });
+
+      // Verify sendMessage returned a valid message key
+      if (!result?.key?.id) {
+        throw new Error('sendMessage returned no message key — message likely not delivered');
+      }
+
       return true;
     } catch (err) {
       const isRetryable = err?.message?.includes('timed out') ||
@@ -161,6 +187,36 @@ export async function sendCampaignMessage(payload) {
   const shuffled = shuffle([...targets]);
   const remaining = getRemainingGlobalQuota();
   logger.info({ message_id, total: shuffled.length, dailyRemaining: remaining }, 'Starting campaign send');
+
+  // PRE-SEND: Verify the connection is REALLY working (not a zombie session)
+  // Use the first target group as a test — if groupMetadata fails, the whole session is broken
+  const testInstance = pickNextInstance();
+  if (testInstance?.socket) {
+    const testJid = toGroupJid(shuffled[0].group_wa_id);
+    const isReal = await verifyConnectionIsReal(testInstance.socket, testJid);
+    if (!isReal) {
+      logger.error({ message_id, total: shuffled.length }, 'ABORTING CAMPAIGN — zombie session detected, connection is not functional');
+      sendTelegramAlert(
+        `🔴 <b>CAMPAGNE AVORTÉE — Session WhatsApp zombie !</b>\n\n` +
+        `Message #${message_id} : ${shuffled.length} groupes annulés.\n` +
+        `→ La connexion semble active mais ne fonctionne PAS réellement.\n\n` +
+        `<b>Action requise :</b> Déconnectez puis reconnectez le numéro depuis le dashboard.`,
+      );
+      for (const target of shuffled) {
+        await reportGroupResult({
+          message_id,
+          group_wa_id: target.group_wa_id,
+          language: target.language,
+          content: target.content,
+          status: 'failed',
+          error_message: 'zombie_session: connection not functional',
+        });
+      }
+      await reportCampaignComplete({ message_id, total: shuffled.length, sent_count: 0, failed_count: shuffled.length });
+      return;
+    }
+    logger.info({ message_id }, 'Pre-send connection verification PASSED');
+  }
 
   // If all instances at daily limit, report as quota_exceeded for carry-over
   if (!canSendGlobally()) {
@@ -308,6 +364,14 @@ export async function testSend(group_wa_id, content, instanceSlug) {
   }
 
   const jid = toGroupJid(group_wa_id);
+
+  // Verify connection is real before sending
+  const isReal = await verifyConnectionIsReal(instance.socket, jid);
+  if (!isReal) {
+    const error = 'zombie_session: connection not functional — reconnect WhatsApp';
+    logger.error({ group_wa_id, jid, instance: instance.slug }, error);
+    return { success: false, jid, error };
+  }
 
   try {
     await sendWithRetry(instance.socket, jid, content);
