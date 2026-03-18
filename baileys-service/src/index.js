@@ -208,41 +208,7 @@ app.get('/instances/:slug/health', requireApiKey, (req, res) => {
   return res.json(health);
 });
 
-/**
- * POST /instances/:slug/pair-code
- * Request a pairing code (alternative to QR code scanning).
- * Body: { phone: "33743331201" } — phone number without + prefix
- */
-app.post('/instances/:slug/pair-code', requireApiKey, async (req, res) => {
-  const { slug } = req.params;
-  const { phone } = req.body || {};
-
-  if (!phone) {
-    return res.status(400).json({ error: 'phone is required (e.g. "33743331201")' });
-  }
-
-  const inst = getInstance(slug);
-  if (!inst) {
-    return res.status(404).json({ error: `Instance ${slug} not found` });
-  }
-
-  if (inst.connected) {
-    return res.json({ success: true, message: 'Already connected', connected: true });
-  }
-
-  if (!inst.socket) {
-    return res.status(503).json({ error: 'Socket not initialized — wait a few seconds and retry' });
-  }
-
-  try {
-    const code = await inst.socket.requestPairingCode(phone);
-    logger.info({ slug, phone, code }, 'Pairing code requested');
-    return res.json({ success: true, code });
-  } catch (err) {
-    logger.error({ slug, phone, err: err.message }, 'Failed to request pairing code');
-    return res.status(500).json({ error: 'Failed to request pairing code: ' + err.message });
-  }
-});
+// Pairing code removed — not compatible with WhatsApp Business
 
 // ===========================================================================
 // LEGACY / EXISTING ENDPOINTS (updated for multi-instance)
