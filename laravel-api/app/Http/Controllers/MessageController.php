@@ -305,4 +305,41 @@ class MessageController extends Controller
             'group_id' => $group->id,
         ]);
     }
+
+    /**
+     * Skip (suspend) a message for a specific group.
+     * Marks the send_log as 'failed' with error_message 'skipped'.
+     * The group will not receive this message and will be excluded from retries.
+     */
+    public function skipGroup(Request $request, int $seriesId, int $messageId): JsonResponse
+    {
+        $validated = $request->validate([
+            'group_id' => ['required', 'integer', 'exists:groups,id'],
+        ]);
+
+        $message = CampaignMessage::where('series_id', $seriesId)->findOrFail($messageId);
+        $group = Group::findOrFail($validated['group_id']);
+
+        // Replace existing log or create new one with 'skipped' status
+        SendLog::where('message_id', $message->id)
+            ->where('group_id', $group->id)
+            ->delete();
+
+        SendLog::create([
+            'message_id'    => $message->id,
+            'group_id'      => $group->id,
+            'language'      => $group->language,
+            'content_sent'  => '',
+            'status'        => 'failed',
+            'sent_at'       => now(),
+            'error_message' => 'skipped',
+        ]);
+
+        Log::info("MessageController::skipGroup — message #{$message->id}, group #{$group->id} ({$group->name}) marked as skipped");
+
+        return response()->json([
+            'message' => "Groupe {$group->name} suspendu pour ce message.",
+            'group_id' => $group->id,
+        ]);
+    }
 }

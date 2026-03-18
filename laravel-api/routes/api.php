@@ -121,5 +121,6 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         Route::post('/series/{seriesId}/messages/translate', [MessageController::class, 'translate']);
         Route::post('/series/{seriesId}/messages/{messageId}/force-send', [MessageController::class, 'forceSend']);
         Route::post('/series/{seriesId}/messages/{messageId}/resend-group', [MessageController::class, 'resendToGroup']);
+        Route::post('/series/{seriesId}/messages/{messageId}/skip-group', [MessageController::class, 'skipGroup']);
     });
 });
