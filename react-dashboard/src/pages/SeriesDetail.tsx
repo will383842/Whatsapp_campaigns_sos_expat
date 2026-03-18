@@ -1,8 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus } from '../hooks/useSeries'
+import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus, useForceSendMessage, useMessageLogs } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
-import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil, CalendarDays } from 'lucide-react'
+import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil, CalendarDays, Send, CheckCircle, XOctagon, CircleDot } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
 import SendReport from '../components/SendReport'
 import { useGroups } from '../hooks/useSeries'
@@ -487,6 +487,89 @@ function BulkDateEditor({
 
 // ── Message accordion ─────────────────────────────────────────────────────────
 
+function MessageDeliveryStatus({ seriesId, messageId }: { seriesId: number; messageId: number }) {
+  const { data: logs, isLoading } = useMessageLogs(seriesId, messageId)
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 py-3 text-xs text-gray-400">
+        <Loader2 size={12} className="animate-spin" />
+        Chargement des statuts...
+      </div>
+    )
+  }
+
+  if (!logs || logs.length === 0) {
+    return (
+      <p className="text-xs text-gray-400 py-2 italic">Aucun envoi enregistré pour ce message.</p>
+    )
+  }
+
+  const sent = logs.filter((l) => l.status === 'sent')
+  const failed = logs.filter((l) => l.status === 'failed')
+  const quotaExceeded = logs.filter((l) => l.status === 'quota_exceeded')
+
+  return (
+    <div className="mt-3 border-t border-gray-200 pt-3">
+      <h4 className="text-xs font-semibold text-gray-600 mb-2 flex items-center gap-1.5">
+        <Users size={13} />
+        Livraison par groupe ({logs.length} groupe{logs.length > 1 ? 's' : ''})
+      </h4>
+
+      {/* Summary badges */}
+      <div className="flex gap-2 mb-2 flex-wrap">
+        {sent.length > 0 && (
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
+            <CheckCircle size={11} /> {sent.length} envoyé{sent.length > 1 ? 's' : ''}
+          </span>
+        )}
+        {quotaExceeded.length > 0 && (
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-600 font-medium">
+            <CircleDot size={11} /> {quotaExceeded.length} en attente (quota)
+          </span>
+        )}
+        {failed.length > 0 && (
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">
+            <XOctagon size={11} /> {failed.length} échoué{failed.length > 1 ? 's' : ''}
+          </span>
+        )}
+      </div>
+
+      {/* Per-group table */}
+      <div className="max-h-48 overflow-y-auto border border-gray-100 rounded-lg">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 sticky top-0">
+            <tr>
+              <th className="text-left px-2.5 py-1.5 font-medium text-gray-500">Groupe</th>
+              <th className="text-center px-2.5 py-1.5 font-medium text-gray-500">Langue</th>
+              <th className="text-center px-2.5 py-1.5 font-medium text-gray-500">Statut</th>
+              <th className="text-right px-2.5 py-1.5 font-medium text-gray-500">Heure</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {logs.map((log) => (
+              <tr key={log.id} className="hover:bg-gray-50">
+                <td className="px-2.5 py-1.5 text-gray-700">{log.group?.name ?? `Groupe #${log.group_id}`}</td>
+                <td className="px-2.5 py-1.5 text-center">{LANG_FLAGS[log.language] ?? log.language}</td>
+                <td className="px-2.5 py-1.5 text-center">
+                  {log.status === 'sent' && <span className="text-green-600" title="Envoyé">✅</span>}
+                  {log.status === 'quota_exceeded' && <span className="text-orange-500" title="En attente (quota)">🟠</span>}
+                  {log.status === 'failed' && (
+                    <span className="text-red-500" title={log.error_message ?? 'Échoué'}>❌</span>
+                  )}
+                </td>
+                <td className="px-2.5 py-1.5 text-right text-gray-400">
+                  {log.sent_at ? formatTime(log.sent_at) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 function MessageAccordion({ msg, index, seriesId, isAdmin }: { msg: CampaignMessage; index: number; seriesId: number; isAdmin: boolean }) {
   const [open, setOpen] = useState(false)
   const [activeLang, setActiveLang] = useState<string>(
@@ -496,9 +579,12 @@ function MessageAccordion({ msg, index, seriesId, isAdmin }: { msg: CampaignMess
   const [editContent, setEditContent] = useState('')
   const [editDate, setEditDate] = useState('')
   const qc = useQueryClient()
+  const forceSend = useForceSendMessage(seriesId)
 
   const isEditable = msg.status === 'pending' || msg.status === 'partially_sent'
   const isSent = msg.status === 'sent' || msg.status === 'failed'
+  const canForceSend = msg.status === 'partially_sent' || msg.status === 'pending'
+  const hasBeenSent = msg.status === 'sent' || msg.status === 'partially_sent' || msg.status === 'failed' || msg.status === 'sending'
 
   const updateMsg = useMutation({
     mutationFn: async (data: { scheduled_at?: string; translations?: { language: string; content: string }[] }) => {
@@ -576,15 +662,32 @@ function MessageAccordion({ msg, index, seriesId, isAdmin }: { msg: CampaignMess
               <p className="text-xs text-gray-500">
                 Prévu le {new Date(msg.scheduled_at).toLocaleString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
               </p>
-              {isAdmin && isEditable && (
-                <button
-                  onClick={startEditing}
-                  className="flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium"
-                >
-                  <Pencil size={12} />
-                  Modifier
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {isAdmin && canForceSend && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (confirm('Forcer l\'envoi immédiat de ce message ? Les groupes en attente (quota) seront ré-envoyés.')) {
+                        forceSend.mutate(msg.id)
+                      }
+                    }}
+                    disabled={forceSend.isPending}
+                    className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium px-2 py-1 rounded-lg hover:bg-orange-50 transition-colors disabled:opacity-50"
+                  >
+                    {forceSend.isPending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                    Forcer l'envoi
+                  </button>
+                )}
+                {isAdmin && isEditable && (
+                  <button
+                    onClick={startEditing}
+                    className="flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium"
+                  >
+                    <Pencil size={12} />
+                    Modifier
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -669,6 +772,9 @@ function MessageAccordion({ msg, index, seriesId, isAdmin }: { msg: CampaignMess
               Envoyé le {new Date(msg.sent_at).toLocaleString('fr-FR')}
             </p>
           )}
+
+          {/* Delivery status per group — shown for messages that have been sent */}
+          {hasBeenSent && <MessageDeliveryStatus seriesId={seriesId} messageId={msg.id} />}
         </div>
       )}
     </div>

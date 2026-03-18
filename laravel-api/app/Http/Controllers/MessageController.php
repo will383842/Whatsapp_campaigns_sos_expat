@@ -2,11 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\SendMessageJob;
 use App\Models\CampaignMessage;
 use App\Models\CampaignSeries;
+use App\Models\SendLog;
 use App\Services\TranslationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class MessageController extends Controller
@@ -170,5 +174,45 @@ class MessageController extends Controller
         $logs = $message->sendLogs()->with('group:id,name,language,whatsapp_group_id')->get();
 
         return response()->json($logs);
+    }
+
+    /**
+     * Force-send a partially_sent or pending message immediately,
+     * bypassing the daily quota wait (carry-over).
+     */
+    public function forceSend(int $seriesId, int $messageId): JsonResponse
+    {
+        $message = CampaignMessage::where('series_id', $seriesId)->findOrFail($messageId);
+
+        if (! in_array($message->status, ['partially_sent', 'pending'], true)) {
+            return response()->json([
+                'message' => 'Seuls les messages en attente ou partiellement envoyés peuvent être forcés.',
+            ], 422);
+        }
+
+        $series = $message->series;
+        if (in_array($series->status, ['draft', 'paused', 'failed', 'completed'], true)) {
+            return response()->json([
+                'message' => 'La série doit être active ou planifiée pour forcer un envoi.',
+            ], 422);
+        }
+
+        DB::transaction(function () use ($message) {
+            // Remove quota_exceeded logs so buildTargets sees them as unsent
+            $deleted = SendLog::where('message_id', $message->id)
+                ->where('status', 'quota_exceeded')
+                ->delete();
+
+            $message->update(['status' => 'sending']);
+
+            Log::info("MessageController::forceSend — message #{$message->id} force-dispatched, {$deleted} quota_exceeded logs cleared.");
+        });
+
+        dispatch(new SendMessageJob($message->id));
+
+        return response()->json([
+            'message' => 'Message forcé en envoi immédiat.',
+            'message_id' => $message->id,
+        ]);
     }
 }

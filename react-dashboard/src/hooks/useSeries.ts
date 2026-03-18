@@ -183,6 +183,36 @@ export function useTranslateSeries(id: number | string) {
   })
 }
 
+// ── Force send a message ─────────────────────────────────────────────────────
+
+export function useForceSendMessage(seriesId: number | string) {
+  const qc = useQueryClient()
+  return useMutation<{ message: string }, Error, number>({
+    mutationFn: async (messageId) => {
+      const res = await api.post(`/api/series/${seriesId}/messages/${messageId}/force-send`)
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['series', String(seriesId)] })
+      qc.invalidateQueries({ queryKey: ['send-logs', String(seriesId)] })
+      qc.invalidateQueries({ queryKey: ['queue-status'] })
+    },
+  })
+}
+
+// ── Message send logs ────────────────────────────────────────────────────────
+
+export function useMessageLogs(seriesId: number | string, messageId: number | null) {
+  return useQuery<import('../types/series').SendLog[]>({
+    queryKey: ['message-logs', seriesId, messageId],
+    queryFn: async () => {
+      const res = await api.get(`/api/series/${seriesId}/messages/${messageId}/logs`)
+      return res.data
+    },
+    enabled: !!messageId,
+  })
+}
+
 // ── Queue status ──────────────────────────────────────────────────────────────
 
 export function useQueueStatus() {
