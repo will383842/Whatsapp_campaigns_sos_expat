@@ -11,37 +11,102 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      - name: Checkout code (for change detection)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect what changed
+        id: changes
+        run: |
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "all")
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+
+          if echo "$CHANGED" | grep -q "^baileys-service/"; then
+            echo "baileys=true" >> $GITHUB_OUTPUT
+          else
+            echo "baileys=false" >> $GITHUB_OUTPUT
+          fi
+
+          if echo "$CHANGED" | grep -q "^laravel-api/"; then
+            echo "laravel=true" >> $GITHUB_OUTPUT
+          else
+            echo "laravel=false" >> $GITHUB_OUTPUT
+          fi
+
+          if echo "$CHANGED" | grep -q "^react-dashboard/"; then
+            echo "frontend=true" >> $GITHUB_OUTPUT
+          else
+            echo "frontend=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            cd /opt/whatsapp-campaigns
+        env:
+          BAILEYS_CHANGED: ${{ steps.changes.outputs.baileys }}
+          LARAVEL_CHANGED: ${{ steps.changes.outputs.laravel }}
+          FRONTEND_CHANGED: ${{ steps.changes.outputs.frontend }}
+        script: |
+          cd /opt/whatsapp-campaigns
 
-            # Preserve production .env (contains APP_KEY, secrets)
-            cp .env.production /tmp/.env.production.bak
+          # Preserve production .env
+          cp .env.production /tmp/.env.production.bak
 
-            # Pull latest code
-            git fetch origin master
-            git reset --hard origin/master
+          # Pull latest code
+          git fetch origin master
+          git reset --hard origin/master
 
-            # Restore production .env
-            cp /tmp/.env.production.bak .env.production
+          # Restore production .env
+          cp /tmp/.env.production.bak .env.production
 
-            # Rebuild and restart containers
-            docker compose build --no-cache app queue scheduler baileys frontend
-            docker compose up -d --force-recreate
+          # Build ONLY what changed — NEVER touch Baileys unless its code changed
+          SERVICES_TO_BUILD=""
+          SERVICES_TO_RECREATE=""
 
-            # Wait for containers to be healthy
-            sleep 5
+          if [ "$LARAVEL_CHANGED" = "true" ]; then
+            SERVICES_TO_BUILD="$SERVICES_TO_BUILD app"
+            SERVICES_TO_RECREATE="$SERVICES_TO_RECREATE app queue scheduler"
+            echo "→ Laravel changed: rebuilding app, queue, scheduler"
+          fi
 
-            # Clear Laravel caches
-            docker exec wc-app php artisan optimize:clear
-            docker exec wc-app php artisan optimize
+          if [ "$FRONTEND_CHANGED" = "true" ]; then
+            SERVICES_TO_BUILD="$SERVICES_TO_BUILD frontend"
+            SERVICES_TO_RECREATE="$SERVICES_TO_RECREATE frontend"
+            echo "→ Frontend changed: rebuilding frontend"
+          fi
 
-            # Run migrations
-            docker exec wc-app php artisan migrate --force
+          if [ "$BAILEYS_CHANGED" = "true" ]; then
+            SERVICES_TO_BUILD="$SERVICES_TO_BUILD baileys"
+            SERVICES_TO_RECREATE="$SERVICES_TO_RECREATE baileys"
+            echo "⚠️ Baileys changed: rebuilding baileys (WhatsApp will reconnect)"
+          fi
 
-            echo "Deploy complete: $(date)"
+          # If nothing specific matched (e.g. docker-compose.yml, deploy/, etc.), rebuild app+frontend only
+          if [ -z "$SERVICES_TO_BUILD" ]; then
+            SERVICES_TO_BUILD="app frontend"
+            SERVICES_TO_RECREATE="app queue scheduler frontend"
+            echo "→ Generic change: rebuilding app + frontend (Baileys untouched)"
+          fi
+
+          echo "Building: $SERVICES_TO_BUILD"
+          docker compose build --no-cache $SERVICES_TO_BUILD
+
+          echo "Recreating: $SERVICES_TO_RECREATE"
+          docker compose up -d --force-recreate $SERVICES_TO_RECREATE
+
+          # Wait for containers to be healthy
+          sleep 5
+
+          # Clear Laravel caches
+          docker exec wc-app php artisan optimize:clear
+          docker exec wc-app php artisan optimize
+
+          # Run migrations
+          docker exec wc-app php artisan migrate --force
+
+          echo "Deploy complete: $(date)"
+          echo "Baileys touched: $BAILEYS_CHANGED"
