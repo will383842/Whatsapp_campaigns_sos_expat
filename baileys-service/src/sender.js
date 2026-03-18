@@ -106,19 +106,24 @@ async function reportCampaignComplete({ message_id, total, sent_count, failed_co
 /**
  * Verify the WhatsApp connection is REALLY functional (not a zombie session).
  * A zombie session reports connected=true but can't actually interact with WA.
- * We test by fetching metadata of the target group — if this times out or fails,
- * the connection is broken even if Baileys thinks it's connected.
+ *
+ * Uses groupFetchAllParticipating() which lists the groups this number is in.
+ * This works even if the number isn't in the target group — it just needs a
+ * working WhatsApp connection. If it times out → zombie session.
+ *
+ * NOTE: Does NOT use groupMetadata(targetJid) because that fails with
+ * "forbidden" if the number isn't a member of the group (false positive).
  */
-async function verifyConnectionIsReal(sock, testJid) {
+async function verifyConnectionIsReal(sock) {
   try {
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Connection verification timed out (8s)')), 8000)
     );
-    const check = sock.groupMetadata(testJid);
-    const meta = await Promise.race([check, timeout]);
-    return !!meta?.id;
+    const check = sock.groupFetchAllParticipating();
+    await Promise.race([check, timeout]);
+    return true;
   } catch (err) {
-    logger.error({ testJid, err: err.message }, 'Connection verification FAILED — zombie session detected');
+    logger.error({ err: err.message }, 'Connection verification FAILED — zombie session detected');
     return false;
   }
 }
@@ -193,7 +198,7 @@ export async function sendCampaignMessage(payload) {
   const testInstance = pickNextInstance();
   if (testInstance?.socket) {
     const testJid = toGroupJid(shuffled[0].group_wa_id);
-    const isReal = await verifyConnectionIsReal(testInstance.socket, testJid);
+    const isReal = await verifyConnectionIsReal(testInstance.socket);
     if (!isReal) {
       logger.error({ message_id, total: shuffled.length }, 'ABORTING CAMPAIGN — zombie session detected, connection is not functional');
       sendTelegramAlert(
@@ -366,7 +371,7 @@ export async function testSend(group_wa_id, content, instanceSlug) {
   const jid = toGroupJid(group_wa_id);
 
   // Verify connection is real before sending
-  const isReal = await verifyConnectionIsReal(instance.socket, jid);
+  const isReal = await verifyConnectionIsReal(instance.socket);
   if (!isReal) {
     const error = 'zombie_session: connection not functional — reconnect WhatsApp';
     logger.error({ group_wa_id, jid, instance: instance.slug }, error);
