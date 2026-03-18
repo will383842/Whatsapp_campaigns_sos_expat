@@ -2,7 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
-import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil } from 'lucide-react'
+import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil, CalendarDays } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
 import SendReport from '../components/SendReport'
 import { useGroups } from '../hooks/useSeries'
@@ -302,6 +302,189 @@ function QueueItem({ item }: { item: QueueStatusItem }) {
   )
 }
 
+// ── Bulk date editor ──────────────────────────────────────────────────────────
+
+function BulkDateEditor({
+  messages, seriesId, onDone,
+}: {
+  messages: CampaignMessage[]
+  seriesId: number
+  onDone: () => void
+}) {
+  const editableMessages = [...messages]
+    .filter((m) => m.status === 'pending' || m.status === 'partially_sent')
+    .sort((a, b) => a.order_index - b.order_index)
+
+  const [dates, setDates] = useState<Record<number, string>>(() => {
+    const init: Record<number, string> = {}
+    editableMessages.forEach((m) => {
+      init[m.id] = m.scheduled_at ? new Date(m.scheduled_at).toISOString().slice(0, 16) : ''
+    })
+    return init
+  })
+
+  const [saving, setSaving] = useState(false)
+  const [savedCount, setSavedCount] = useState(0)
+  const qc = useQueryClient()
+
+  const hasChanges = editableMessages.some((m) => {
+    const original = m.scheduled_at ? new Date(m.scheduled_at).toISOString().slice(0, 16) : ''
+    return dates[m.id] !== original
+  })
+
+  const changedMessages = editableMessages.filter((m) => {
+    const original = m.scheduled_at ? new Date(m.scheduled_at).toISOString().slice(0, 16) : ''
+    return dates[m.id] !== original
+  })
+
+  const saveAll = async () => {
+    setSaving(true)
+    setSavedCount(0)
+    try {
+      for (const msg of changedMessages) {
+        await api.put(`/api/series/${seriesId}/messages/${msg.id}`, {
+          scheduled_at: new Date(dates[msg.id]).toISOString(),
+        })
+        setSavedCount((c) => c + 1)
+      }
+      qc.invalidateQueries({ queryKey: ['series', String(seriesId)] })
+      onDone()
+    } catch {
+      // keep editor open on error
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Shift all dates by a delta
+  const [shiftDays, setShiftDays] = useState(0)
+  const applyShift = () => {
+    if (shiftDays === 0) return
+    setDates((prev) => {
+      const next = { ...prev }
+      editableMessages.forEach((m) => {
+        if (prev[m.id]) {
+          const d = new Date(prev[m.id])
+          d.setDate(d.getDate() + shiftDays)
+          next[m.id] = d.toISOString().slice(0, 16)
+        }
+      })
+      return next
+    })
+  }
+
+  if (editableMessages.length === 0) {
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-xl p-6 text-center">
+        <p className="text-sm text-gray-500">Aucun message modifiable (tous envoyés ou échoués).</p>
+        <button onClick={onDone} className="mt-3 text-sm text-green-600 hover:text-green-700 font-medium">
+          Fermer
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+          <CalendarDays size={16} className="text-green-600" />
+          Modifier les dates ({editableMessages.length} message{editableMessages.length > 1 ? 's' : ''})
+        </h3>
+        <button onClick={onDone} className="text-xs text-gray-500 hover:text-gray-700 font-medium">
+          Annuler
+        </button>
+      </div>
+
+      {/* Shift tool */}
+      <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+        <span className="text-xs text-gray-600">Décaler toutes les dates de</span>
+        <input
+          type="number"
+          value={shiftDays}
+          onChange={(e) => setShiftDays(parseInt(e.target.value) || 0)}
+          className="w-16 text-sm border border-gray-300 rounded px-2 py-1 text-center focus:outline-none focus:ring-2 focus:ring-green-500"
+        />
+        <span className="text-xs text-gray-600">jour(s)</span>
+        <button
+          onClick={applyShift}
+          disabled={shiftDays === 0}
+          className="text-xs font-medium text-green-600 hover:text-green-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+        >
+          Appliquer
+        </button>
+      </div>
+
+      {/* Messages list */}
+      <div className="space-y-2 max-h-96 overflow-y-auto">
+        {editableMessages.map((m, i) => {
+          const original = m.scheduled_at ? new Date(m.scheduled_at).toISOString().slice(0, 16) : ''
+          const changed = dates[m.id] !== original
+          return (
+            <div
+              key={m.id}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors ${
+                changed ? 'border-green-300 bg-green-50' : 'border-gray-100 bg-gray-50'
+              }`}
+            >
+              <span className="text-sm font-semibold text-gray-600 w-24 shrink-0">
+                Message {i + 1}
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                (MSG_STATUS_CONFIG[m.status] ?? MSG_STATUS_CONFIG.pending).classes
+              }`}>
+                {(MSG_STATUS_CONFIG[m.status] ?? MSG_STATUS_CONFIG.pending).label}
+              </span>
+              <div className="flex-1" />
+              <input
+                type="datetime-local"
+                value={dates[m.id] ?? ''}
+                onChange={(e) => setDates((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              {changed && (
+                <span className="text-xs text-green-600 font-medium">modifié</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
+        <button
+          onClick={saveAll}
+          disabled={!hasChanges || saving}
+          className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+        >
+          {saving ? (
+            <>
+              <Loader2 size={14} className="animate-spin" />
+              {savedCount}/{changedMessages.length}
+            </>
+          ) : (
+            <>
+              <Save size={14} />
+              Enregistrer {changedMessages.length > 0 ? `(${changedMessages.length})` : ''}
+            </>
+          )}
+        </button>
+        <button
+          onClick={onDone}
+          className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+        >
+          Annuler
+        </button>
+        {changedMessages.length > 0 && !saving && (
+          <span className="text-xs text-gray-400">
+            {changedMessages.length} date{changedMessages.length > 1 ? 's' : ''} modifiée{changedMessages.length > 1 ? 's' : ''}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Message accordion ─────────────────────────────────────────────────────────
 
 function MessageAccordion({ msg, index, seriesId, isAdmin }: { msg: CampaignMessage; index: number; seriesId: number; isAdmin: boolean }) {
@@ -502,6 +685,7 @@ export default function SeriesDetail() {
   const { isAdmin } = useAuthContext()
   const [activeTab, setActiveTab] = useState<Tab>('planning')
   const [showGroups, setShowGroups] = useState(false)
+  const [editingDates, setEditingDates] = useState(false)
 
   const { data: series, isLoading, error } = useSeriesDetail(id!)
   const { data: groups = [] } = useGroups()
@@ -837,12 +1021,33 @@ export default function SeriesDetail() {
               <p className="text-center text-gray-400 py-8">
                 Aucun message dans cette série.
               </p>
+            ) : editingDates ? (
+              <BulkDateEditor
+                messages={series.messages ?? []}
+                seriesId={series.id}
+                onDone={() => setEditingDates(false)}
+              />
             ) : (
-              [...(series.messages ?? [])]
-                .sort((a, b) => a.order_index - b.order_index)
-                .map((msg, i) => (
-                  <MessageAccordion key={msg.id} msg={msg} index={i} seriesId={series.id} isAdmin={isAdmin} />
-                ))
+              <>
+                {/* Bulk date edit button */}
+                {isAdmin && (series.messages ?? []).some((m) => m.status === 'pending' || m.status === 'partially_sent') && (
+                  <div className="flex justify-end mb-1">
+                    <button
+                      onClick={() => setEditingDates(true)}
+                      className="flex items-center gap-1.5 text-sm font-medium text-green-600 hover:text-green-700 px-3 py-2 rounded-lg hover:bg-green-50 transition-colors"
+                    >
+                      <CalendarDays size={15} />
+                      Modifier les dates
+                    </button>
+                  </div>
+                )}
+                {[...(series.messages ?? [])]
+                  .sort((a, b) => a.order_index - b.order_index)
+                  .map((msg, i) => (
+                    <MessageAccordion key={msg.id} msg={msg} index={i} seriesId={series.id} isAdmin={isAdmin} />
+                  ))
+                }
+              </>
             )}
           </div>
         )}
