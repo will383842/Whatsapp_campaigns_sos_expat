@@ -489,31 +489,31 @@ function BulkDateEditor({
 
 function ResendButton({ seriesId, messageId, groupId, groupName }: { seriesId: number; messageId: number; groupId: number; groupName: string }) {
   const resend = useResendToGroup(seriesId, messageId)
-  const [feedback, setFeedback] = useState<'success' | 'error' | null>(null)
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   const handleResend = () => {
     if (!confirm(`Renvoyer ce message a ${groupName} ?`)) return
     setFeedback(null)
     resend.mutate(groupId, {
-      onSuccess: () => {
-        setFeedback('success')
-        setTimeout(() => setFeedback(null), 5000)
+      onSuccess: (data) => {
+        setFeedback({ type: 'success', message: data.message || 'Envoye !' })
+        setTimeout(() => setFeedback(null), 8000)
       },
-      onError: () => {
-        setFeedback('error')
-        setTimeout(() => setFeedback(null), 5000)
+      onError: (err: any) => {
+        const msg = err?.response?.data?.message || err.message || 'Erreur inconnue'
+        setFeedback({ type: 'error', message: msg })
       },
     })
   }
 
-  if (feedback === 'success') {
-    return <span className="flex items-center gap-1 text-xs text-green-600 font-medium"><CheckCircle size={10} /> Envoye !</span>
+  if (feedback?.type === 'success') {
+    return <span className="flex items-center gap-1 text-xs text-green-600 font-medium"><CheckCircle size={10} /> {feedback.message}</span>
   }
-  if (feedback === 'error') {
+  if (feedback?.type === 'error') {
     return (
-      <div className="flex items-center gap-1">
-        <span className="text-xs text-red-500 font-medium">Echec</span>
-        <button onClick={handleResend} className="text-xs text-blue-600 hover:text-blue-700 underline">Reessayer</button>
+      <div className="flex flex-col gap-1 max-w-48">
+        <span className="text-xs text-red-500 font-medium leading-tight">{feedback.message}</span>
+        <button onClick={handleResend} className="text-xs text-blue-600 hover:text-blue-700 underline text-left">Reessayer</button>
       </div>
     )
   }

@@ -252,9 +252,10 @@ class MessageController extends Controller
         }
 
         // Send via Baileys /send/test
+        // Don't force instance_slug — let Baileys pick any connected instance
         $baileysUrl = config('baileys.service_url');
         $baileysKey = config('baileys.api_key');
-        $client = new Client(['timeout' => 15]);
+        $client = new Client(['timeout' => 20]);
 
         try {
             $response = $client->post("{$baileysUrl}/send/test", [
@@ -263,23 +264,30 @@ class MessageController extends Controller
                     'Content-Type' => 'application/json',
                 ],
                 'json' => [
-                    'group_wa_id'   => $group->whatsapp_group_id,
-                    'content'       => $translation->content,
-                    'instance_slug' => $group->whatsappNumber?->slug,
+                    'group_wa_id' => $group->whatsapp_group_id,
+                    'content'     => $translation->content,
                 ],
             ]);
 
             $result = json_decode($response->getBody()->getContents(), true);
 
             if (! ($result['success'] ?? false)) {
-                return response()->json([
-                    'message' => 'Baileys a refusé l\'envoi : ' . ($result['error'] ?? 'unknown'),
-                ], 502);
+                $error = $result['error'] ?? 'Erreur inconnue';
+                if (str_contains($error, 'zombie_session')) {
+                    $error = 'Session WhatsApp zombie — reconnectez le numero depuis WhatsApp Numbers.';
+                } elseif (str_contains($error, 'not connected') || str_contains($error, 'No WhatsApp')) {
+                    $error = 'Aucun numero WhatsApp connecte — scannez le QR code depuis WhatsApp Numbers.';
+                }
+                return response()->json(['message' => $error], 422);
             }
+        } catch (\GuzzleHttp\Exception\ConnectException $e) {
+            return response()->json([
+                'message' => 'Service Baileys injoignable — le service WhatsApp redémarre, réessayez dans 30 secondes.',
+            ], 503);
         } catch (\Exception $e) {
             return response()->json([
-                'message' => 'Erreur d\'envoi Baileys : ' . $e->getMessage(),
-            ], 502);
+                'message' => 'Erreur d\'envoi : ' . $e->getMessage(),
+            ], 422);
         }
 
         // Delete old send_log for this group+message and create a new one
