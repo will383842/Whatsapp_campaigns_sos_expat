@@ -75,6 +75,7 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         Route::post('/whatsapp-numbers/{id}/resume', [WhatsAppNumberController::class, 'resume']);
         Route::post('/whatsapp-numbers/{id}/restart', [WhatsAppNumberController::class, 'restart']);
         Route::get('/whatsapp-numbers/{id}/qr', [WhatsAppNumberController::class, 'qr']);
+        Route::post('/whatsapp-numbers/{id}/pair-code', [WhatsAppNumberController::class, 'pairCode']);
         Route::post('/whatsapp-numbers/{id}/set-default', [WhatsAppNumberController::class, 'setDefault']);
     });
 

@@ -61,26 +61,109 @@ function Toast({ toast }: { toast: { message: string; type: 'success' | 'error' 
   )
 }
 
-// ── QR Code inline component ─────────────────────────────────────────────────
+// ── QR Code + Pairing Code inline component ─────────────────────────────────
 
 function InlineQr({ numberId }: { numberId: number }) {
   const { data } = useWhatsAppNumberQr(numberId)
+  const [mode, setMode] = useState<'qr' | 'code'>('qr')
+  const [pairingCode, setPairingCode] = useState<string | null>(null)
+  const [pairingLoading, setPairingLoading] = useState(false)
+  const [pairingError, setPairingError] = useState<string | null>(null)
 
   if (data?.connected) return null
 
+  const requestPairingCode = async () => {
+    setPairingLoading(true)
+    setPairingError(null)
+    setPairingCode(null)
+    try {
+      const { default: api } = await import('../api/client')
+      const res = await api.post(`/api/whatsapp-numbers/${numberId}/pair-code`)
+      if (res.data.code) {
+        setPairingCode(res.data.code)
+      } else {
+        setPairingError(res.data.error || 'Aucun code recu')
+      }
+    } catch (err: any) {
+      setPairingError(err?.response?.data?.error || err.message || 'Erreur')
+    } finally {
+      setPairingLoading(false)
+    }
+  }
+
   return (
-    <div className="mt-3 flex justify-center p-4 bg-gray-50 rounded-xl">
-      {data?.qr ? (
-        <img
-          src={data.qr}
-          alt="QR Code"
-          className="rounded-lg"
-          style={{ width: 220, height: 220 }}
-        />
+    <div className="mt-3 bg-gray-50 rounded-xl p-4">
+      {/* Toggle tabs */}
+      <div className="flex justify-center gap-2 mb-3">
+        <button
+          onClick={() => setMode('qr')}
+          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+            mode === 'qr' ? 'bg-green-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          QR Code
+        </button>
+        <button
+          onClick={() => { setMode('code'); if (!pairingCode && !pairingLoading) requestPairingCode() }}
+          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+            mode === 'code' ? 'bg-green-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          Code de liaison
+        </button>
+      </div>
+
+      {mode === 'qr' ? (
+        <div className="flex justify-center">
+          {data?.qr ? (
+            <img
+              src={data.qr}
+              alt="QR Code"
+              className="rounded-lg"
+              style={{ width: 220, height: 220 }}
+            />
+          ) : (
+            <div className="text-center py-6">
+              <Loader2 size={20} className="animate-spin text-gray-400 mx-auto mb-2" />
+              <p className="text-xs text-gray-400">En attente du QR code...</p>
+            </div>
+          )}
+        </div>
       ) : (
-        <div className="text-center py-6">
-          <Loader2 size={20} className="animate-spin text-gray-400 mx-auto mb-2" />
-          <p className="text-xs text-gray-400">En attente du QR code...</p>
+        <div className="text-center py-4">
+          {pairingLoading ? (
+            <div>
+              <Loader2 size={20} className="animate-spin text-green-500 mx-auto mb-2" />
+              <p className="text-xs text-gray-500">Demande du code en cours...</p>
+            </div>
+          ) : pairingCode ? (
+            <div>
+              <p className="text-xs text-gray-500 mb-2">Entrez ce code dans WhatsApp :</p>
+              <p className="text-xs text-gray-500 mb-2">
+                Telephone &gt; Appareils lies &gt; Lier un appareil &gt; Lier avec un numero de telephone
+              </p>
+              <div className="text-3xl font-mono font-bold tracking-[0.3em] text-gray-900 bg-white border-2 border-green-300 rounded-xl py-4 px-6 inline-block">
+                {pairingCode.replace(/(.{4})/g, '$1 ').trim()}
+              </div>
+              <p className="text-xs text-gray-400 mt-3">Le code expire dans ~60 secondes</p>
+              <button
+                onClick={requestPairingCode}
+                className="mt-2 text-xs text-green-600 hover:text-green-700 font-medium underline"
+              >
+                Nouveau code
+              </button>
+            </div>
+          ) : pairingError ? (
+            <div>
+              <p className="text-xs text-red-500 mb-2">{pairingError}</p>
+              <button
+                onClick={requestPairingCode}
+                className="text-xs text-green-600 hover:text-green-700 font-medium underline"
+              >
+                Reessayer
+              </button>
+            </div>
+          ) : null}
         </div>
       )}
     </div>

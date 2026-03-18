@@ -262,6 +262,33 @@ class WhatsAppNumberController extends Controller
     }
 
     /**
+     * POST /api/whatsapp-numbers/{id}/pair-code
+     * Request a pairing code (alternative to QR code).
+     */
+    public function pairCode(int $id): JsonResponse
+    {
+        $number = WhatsAppNumber::findOrFail($id);
+
+        try {
+            $response = $this->baileysClient()->post("/instances/{$number->slug}/pair-code", [
+                'json' => ['phone' => $number->phone],
+            ]);
+            $data = json_decode($response->getBody()->getContents(), true);
+
+            if ($response->getStatusCode() >= 400) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $data['error'] ?? 'Failed to request pairing code',
+                ], $response->getStatusCode());
+            }
+
+            return response()->json($data);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
      * POST /api/whatsapp-numbers/{id}/set-default
      */
     public function setDefault(int $id): JsonResponse
