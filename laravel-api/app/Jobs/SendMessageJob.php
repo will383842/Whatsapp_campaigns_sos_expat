@@ -132,12 +132,24 @@ class SendMessageJob implements ShouldQueue
     /**
      * Build the targets array for the Baileys /send payload.
      *
+     * IMPORTANT: Re-loads the series fresh from the DB to avoid stale
+     * targeting data if the series was modified after the job was dispatched.
+     *
      * @return array<int, array{group_wa_id: string, language: string, content: string}>
      */
     private function buildTargets(CampaignMessage $message, \App\Models\CampaignSeries $series): array
     {
+        // Re-load series with fresh targeting data from DB (not eager-loaded cache)
+        $series = $series->fresh(['seriesTargets.group.whatsappNumber']);
+        if (! $series) {
+            Log::error("SendMessageJob: series not found for message #{$message->id}.");
+            return [];
+        }
+
         $targets = [];
         $targetingMode = $series->targeting_mode;
+
+        Log::info("SendMessageJob: message #{$message->id} — targeting_mode={$targetingMode}, series_targets=" . $series->seriesTargets->pluck('group_id')->implode(','));
 
         // Index message_targets by group_id for quick lookup
         $messageTargetsByGroupId = $message->targets->keyBy('group_id');
@@ -154,7 +166,7 @@ class SendMessageJob implements ShouldQueue
             ? $query->whereIn('category', $categories)
             : $query;
 
-        // Resolve group collection
+        // Resolve group collection based on targeting mode
         $groups = match ($targetingMode) {
             'by_language' => $applyCategories(
                 Group::with('whatsappNumber')
@@ -162,9 +174,10 @@ class SendMessageJob implements ShouldQueue
                     ->where('is_active', true)
             )->get(),
 
-            'by_group' => $series->seriesTargets->map->group->filter(
-                fn ($g) => $g && $g->is_active
-            ),
+            'by_group' => Group::with('whatsappNumber')
+                ->whereIn('id', $series->seriesTargets->pluck('group_id'))
+                ->where('is_active', true)
+                ->get(),
 
             'hybrid' => $applyCategories(
                 Group::with('whatsappNumber')
@@ -176,6 +189,8 @@ class SendMessageJob implements ShouldQueue
 
             default => collect(),
         };
+
+        Log::info("SendMessageJob: message #{$message->id} — resolved " . $groups->count() . " target groups: " . $groups->pluck('id')->implode(','));
 
         // Filter out groups already sent
         if (! empty($alreadySentGroupIds)) {

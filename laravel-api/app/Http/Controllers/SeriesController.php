@@ -108,7 +108,15 @@ class SeriesController extends Controller
     {
         $series = CampaignSeries::findOrFail($id);
 
-        // Targeting-only fields are always editable
+        // Block ALL modifications while a message is actively being sent
+        $hasSendingMessage = $series->messages()->where('status', 'sending')->exists();
+        if ($hasSendingMessage) {
+            return response()->json([
+                'message' => 'Impossible de modifier la série : un message est en cours d\'envoi. Attendez la fin de l\'envoi.',
+            ], 409);
+        }
+
+        // Targeting-only fields are always editable (when not sending)
         $targetingFields = ['target_languages', 'target_categories', 'target_groups', 'targeting_mode'];
         $hasNonTargetingFields = count(array_diff(array_keys($request->all()), $targetingFields)) > 0;
 
