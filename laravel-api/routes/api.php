@@ -120,5 +120,6 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         Route::delete('/series/{seriesId}/messages/{messageId}', [MessageController::class, 'destroy']);
         Route::post('/series/{seriesId}/messages/translate', [MessageController::class, 'translate']);
         Route::post('/series/{seriesId}/messages/{messageId}/force-send', [MessageController::class, 'forceSend']);
+        Route::post('/series/{seriesId}/messages/{messageId}/resend-group', [MessageController::class, 'resendToGroup']);
     });
 });

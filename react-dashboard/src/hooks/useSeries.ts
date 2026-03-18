@@ -213,6 +213,24 @@ export function useMessageLogs(seriesId: number | string, messageId: number | nu
   })
 }
 
+// ── Resend to specific group ─────────────────────────────────────────────────
+
+export function useResendToGroup(seriesId: number | string, messageId: number) {
+  const qc = useQueryClient()
+  return useMutation<{ message: string }, Error, number>({
+    mutationFn: async (groupId) => {
+      const res = await api.post(`/api/series/${seriesId}/messages/${messageId}/resend-group`, {
+        group_id: groupId,
+      })
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['message-logs', String(seriesId), messageId] })
+      qc.invalidateQueries({ queryKey: ['send-logs', String(seriesId)] })
+    },
+  })
+}
+
 // ── Queue status ──────────────────────────────────────────────────────────────
 
 export function useQueueStatus() {

@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus, useForceSendMessage, useMessageLogs } from '../hooks/useSeries'
+import { useSeriesDetail, usePauseSeries, useResumeSeries, useCancelSeries, useTranslateSeries, useActivateSeries, useDeactivateSeries, useQueueStatus, useForceSendMessage, useMessageLogs, useResendToGroup } from '../hooks/useSeries'
 import { useAuthContext } from '../contexts/AuthContext'
 import { Pause, Play, XCircle, Copy, ArrowLeft, Loader2, AlertTriangle, Zap, Power, FileText, Users, ChevronDown, ChevronUp, Clock, Save, Pencil, CalendarDays, Send, CheckCircle, XOctagon, CircleDot } from 'lucide-react'
 import PlanningTimeline from '../components/PlanningTimeline'
@@ -487,7 +487,27 @@ function BulkDateEditor({
 
 // ── Message accordion ─────────────────────────────────────────────────────────
 
-function MessageDeliveryStatus({ seriesId, messageId }: { seriesId: number; messageId: number }) {
+function ResendButton({ seriesId, messageId, groupId, groupName }: { seriesId: number; messageId: number; groupId: number; groupName: string }) {
+  const resend = useResendToGroup(seriesId, messageId)
+
+  return (
+    <button
+      onClick={() => {
+        if (confirm(`Renvoyer ce message à ${groupName} ?`)) {
+          resend.mutate(groupId)
+        }
+      }}
+      disabled={resend.isPending}
+      className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50"
+      title={`Renvoyer à ${groupName}`}
+    >
+      {resend.isPending ? <Loader2 size={10} className="animate-spin" /> : <Send size={10} />}
+      {resend.isSuccess ? '✓' : 'Renvoyer'}
+    </button>
+  )
+}
+
+function MessageDeliveryStatus({ seriesId, messageId, isAdmin }: { seriesId: number; messageId: number; isAdmin: boolean }) {
   const { data: logs, isLoading } = useMessageLogs(seriesId, messageId)
 
   if (isLoading) {
@@ -536,7 +556,7 @@ function MessageDeliveryStatus({ seriesId, messageId }: { seriesId: number; mess
       </div>
 
       {/* Per-group table */}
-      <div className="max-h-48 overflow-y-auto border border-gray-100 rounded-lg">
+      <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-lg">
         <table className="w-full text-xs">
           <thead className="bg-gray-50 sticky top-0">
             <tr>
@@ -544,6 +564,7 @@ function MessageDeliveryStatus({ seriesId, messageId }: { seriesId: number; mess
               <th className="text-center px-2.5 py-1.5 font-medium text-gray-500">Langue</th>
               <th className="text-center px-2.5 py-1.5 font-medium text-gray-500">Statut</th>
               <th className="text-right px-2.5 py-1.5 font-medium text-gray-500">Heure</th>
+              {isAdmin && <th className="text-center px-2.5 py-1.5 font-medium text-gray-500">Action</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
@@ -561,6 +582,16 @@ function MessageDeliveryStatus({ seriesId, messageId }: { seriesId: number; mess
                 <td className="px-2.5 py-1.5 text-right text-gray-400">
                   {log.sent_at ? formatTime(log.sent_at) : '—'}
                 </td>
+                {isAdmin && (
+                  <td className="px-2.5 py-1.5 text-center">
+                    <ResendButton
+                      seriesId={seriesId}
+                      messageId={messageId}
+                      groupId={log.group_id}
+                      groupName={log.group?.name ?? `Groupe #${log.group_id}`}
+                    />
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -774,7 +805,7 @@ function MessageAccordion({ msg, index, seriesId, isAdmin }: { msg: CampaignMess
           )}
 
           {/* Delivery status per group — shown for messages that have been sent */}
-          {hasBeenSent && <MessageDeliveryStatus seriesId={seriesId} messageId={msg.id} />}
+          {hasBeenSent && <MessageDeliveryStatus seriesId={seriesId} messageId={msg.id} isAdmin={isAdmin} />}
         </div>
       )}
     </div>
