@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { isAnyConnected, pickNextInstance, getInstanceForGroup, incrementInstanceQuota, canSendGlobally, getRemainingGlobalQuota, getInstance } from './instanceManager.js';
+import { isAnyConnected, pickNextInstance, getInstanceForGroup, incrementInstanceQuota, canSendGlobally, getRemainingGlobalQuota, getInstance, getAllInstances } from './instanceManager.js';
 import { sendTelegramAlert } from './whatsapp.js';
 import { enqueue, CAMPAIGN_DELAY_MIN, CAMPAIGN_DELAY_MAX } from './sendQueue.js';
 import logger from './logger.js';
@@ -381,36 +381,64 @@ export async function sendCampaignMessage(payload) {
 /**
  * Send a single test message.
  * Optionally specify instance_slug, otherwise uses rotation.
+ * If sending fails with "forbidden" (not in group), tries other instances.
  */
 export async function testSend(group_wa_id, content, instanceSlug) {
-  const instance = instanceSlug
-    ? getInstance(instanceSlug)
-    : pickNextInstance();
-
-  if (!instance?.socket) {
-    const error = 'No WhatsApp instance available';
-    logger.error({ group_wa_id }, error);
-    return { success: false, jid: toGroupJid(group_wa_id), error };
-  }
-
   const jid = toGroupJid(group_wa_id);
 
-  // Verify connection is real before sending
-  const isReal = await verifyConnectionIsReal(instance.socket, instance.slug);
-  if (!isReal) {
-    const error = 'zombie_session: connection not functional — reconnect WhatsApp';
-    logger.error({ group_wa_id, jid, instance: instance.slug }, error);
+  // Build list of instances to try: preferred first, then all others
+  const allConnected = getAllInstances().filter(i => i.connected && i.status === 'active');
+
+  let instancesToTry = [];
+  if (instanceSlug) {
+    const preferred = getInstance(instanceSlug);
+    if (preferred?.connected) instancesToTry.push(preferred);
+    instancesToTry.push(...allConnected.filter(i => i.slug !== instanceSlug));
+  } else {
+    const picked = pickNextInstance();
+    if (picked) instancesToTry.push(picked);
+    instancesToTry.push(...allConnected.filter(i => i.slug !== picked?.slug));
+  }
+
+  if (instancesToTry.length === 0) {
+    const error = 'No WhatsApp instance available';
+    logger.error({ group_wa_id }, error);
     return { success: false, jid, error };
   }
 
-  try {
-    await sendWithRetry(instance.socket, jid, content);
-    incrementInstanceQuota(instance.slug);
-    logger.info({ group_wa_id, jid, instance: instance.slug }, 'Test message sent');
-    return { success: true, jid, instance_slug: instance.slug };
-  } catch (err) {
-    const error = err?.message || String(err);
-    logger.error({ group_wa_id, jid, err: error }, 'Test message failed');
-    return { success: false, jid, error };
+  let lastError = '';
+
+  for (const instance of instancesToTry) {
+    if (!instance?.socket) continue;
+
+    // Verify connection is real before sending
+    const isReal = await verifyConnectionIsReal(instance.socket, instance.slug);
+    if (!isReal) {
+      logger.warn({ group_wa_id, jid, instance: instance.slug }, 'testSend: skipping zombie instance');
+      continue;
+    }
+
+    try {
+      await sendWithRetry(instance.socket, jid, content);
+      incrementInstanceQuota(instance.slug);
+      logger.info({ group_wa_id, jid, instance: instance.slug }, 'Test message sent');
+      return { success: true, jid, instance_slug: instance.slug };
+    } catch (err) {
+      lastError = err?.message || String(err);
+      const isForbidden = lastError.includes('forbidden') || lastError.includes('not-authorized');
+      logger.warn({ group_wa_id, jid, instance: instance.slug, err: lastError, isForbidden }, 'testSend: instance failed');
+
+      // If forbidden (not in group), try next instance
+      if (isForbidden && instancesToTry.indexOf(instance) < instancesToTry.length - 1) {
+        logger.info({ group_wa_id, nextInstance: instancesToTry[instancesToTry.indexOf(instance) + 1]?.slug }, 'testSend: trying next instance...');
+        continue;
+      }
+
+      // Non-forbidden error or last instance — give up
+      break;
+    }
   }
+
+  logger.error({ group_wa_id, jid, err: lastError }, 'Test message failed on all instances');
+  return { success: false, jid, error: lastError };
 }
