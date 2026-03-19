@@ -76,6 +76,9 @@ const instances = new Map();
 /** Round-robin counter for pickNextInstance */
 let rotationIndex = 0;
 
+/** Track consecutive reconnection failures per instance for exponential backoff */
+const reconnectFailures = new Map();
+
 /** Daily date for quota reset */
 let dailyDate = new Date().toISOString().slice(0, 10);
 
@@ -353,7 +356,8 @@ async function connectInstance(instance) {
           }
           clearAuthForInstance(instance);
           startDisconnectReminder(instance);
-          setTimeout(() => connectInstance(instance), 3000);
+          // Wait 30s after stream corruption before reconnecting (was 3s — too aggressive)
+          setTimeout(() => connectInstance(instance), 30_000);
           return;
         }
 
@@ -403,7 +407,8 @@ async function connectInstance(instance) {
           startDisconnectReminder(instance);
           clearAuthForInstance(instance);
           instance.socket = null;
-          setTimeout(() => connectInstance(instance), 3000);
+          // Wait 10s before reconnecting after logout (was 3s)
+          setTimeout(() => connectInstance(instance), 10_000);
           return;
         }
 
@@ -412,14 +417,24 @@ async function connectInstance(instance) {
 
         if (!instance.isReconnecting) {
           instance.isReconnecting = true;
+
+          // Exponential backoff: 10s, 20s, 40s, 80s, 160s, max 300s (5 min)
+          const failures = reconnectFailures.get(slug) || 0;
+          const backoffMs = Math.min(10_000 * Math.pow(2, failures), 300_000);
+          reconnectFailures.set(slug, failures + 1);
+
+          log.info({ slug, backoffMs, failures: failures + 1 }, `Reconnecting in ${backoffMs / 1000}s (attempt #${failures + 1})`);
+
           setTimeout(async () => {
-            instance.isReconnecting = false;
             try {
               await connectInstance(instance);
             } catch (err) {
               log.error({ slug, err: err.message }, 'Reconnection failed');
+            } finally {
+              // Only clear AFTER connectInstance completes (success or failure)
+              instance.isReconnecting = false;
             }
-          }, 5000);
+          }, backoffMs);
         }
       }
 
@@ -428,6 +443,7 @@ async function connectInstance(instance) {
         instance.isReconnecting = false;
         instance.lastQr = null;
         instance.lastError = null;
+        reconnectFailures.delete(slug); // Reset backoff on successful connection
         if (instance.status !== 'paused') {
           instance.status = 'active';
         }
@@ -454,12 +470,44 @@ async function connectInstance(instance) {
           instance.welcomeRegistered = true;
         }
 
-        // Simple heartbeat: reconnect if disconnected (no WA API calls)
+        // Heartbeat: reconnect if disconnected + periodic zombie detection
         if (instance.heartbeatInterval) clearInterval(instance.heartbeatInterval);
-        instance.heartbeatInterval = setInterval(() => {
+        let heartbeatTick = 0;
+        instance.heartbeatInterval = setInterval(async () => {
+          heartbeatTick++;
+
+          // Basic check: reconnect if flag says disconnected
           if (!instance.connected && !instance.isReconnecting && instance.status !== 'banned') {
             log.warn({ slug }, 'Heartbeat: disconnected, reconnecting...');
             connectInstance(instance);
+            return;
+          }
+
+          // Every 5 minutes (5 ticks × 60s): verify connection is actually functional
+          if (heartbeatTick % 5 === 0 && instance.connected && instance.socket && instance.status === 'active') {
+            try {
+              const timeout = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Heartbeat zombie check timed out')), 10_000),
+              );
+              const check = instance.socket.groupFetchAllParticipating();
+              await Promise.race([check, timeout]);
+              // Connection is real — reset backoff counter
+              reconnectFailures.delete(slug);
+            } catch (err) {
+              log.error({ slug, err: err.message }, 'HEARTBEAT: zombie session detected — forcing reconnect');
+              instance.connected = false;
+              instance.welcomeRegistered = false;
+              if (instance.socket) {
+                try { instance.socket.end(undefined); } catch { /* ignore */ }
+                instance.socket = null;
+              }
+              sendTelegramAlert(
+                `🧟 <b>Session zombie détectée : [${slug}]</b>\n\n` +
+                `Le numéro ${instance.phone} semblait connecté mais ne répondait plus.\n` +
+                `→ Reconnexion automatique en cours...`,
+              );
+              connectInstance(instance);
+            }
           }
         }, 60_000);
       }
