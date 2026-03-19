@@ -116,15 +116,15 @@ async function reportCampaignComplete({ message_id, total, sent_count, failed_co
  * NOTE: Does NOT use groupMetadata(targetJid) because that fails with
  * "forbidden" if the number isn't a member of the group (false positive).
  */
-const verifyCache = new Map(); // slug → { result: boolean, timestamp: number }
-const VERIFY_CACHE_TTL = 60_000; // 60 seconds
+const verifyCache = new Map(); // slug → { result: true, timestamp: number }
+const VERIFY_CACHE_TTL = 30_000; // 30 seconds — only cache successes
 
 async function verifyConnectionIsReal(sock, instanceSlug) {
-  // Check cache first
+  // Only cache successes — failures are always re-checked
   if (instanceSlug) {
     const cached = verifyCache.get(instanceSlug);
-    if (cached && Date.now() - cached.timestamp < VERIFY_CACHE_TTL) {
-      return cached.result;
+    if (cached?.result === true && Date.now() - cached.timestamp < VERIFY_CACHE_TTL) {
+      return true;
     }
   }
 
@@ -137,9 +137,20 @@ async function verifyConnectionIsReal(sock, instanceSlug) {
     if (instanceSlug) verifyCache.set(instanceSlug, { result: true, timestamp: Date.now() });
     return true;
   } catch (err) {
-    logger.error({ err: err.message }, 'Connection verification FAILED — zombie session detected');
-    if (instanceSlug) verifyCache.set(instanceSlug, { result: false, timestamp: Date.now() });
-    return false;
+    // Differentiate zombie vs transient errors
+    const isTimeout = err.message.includes('timed out');
+    const isDeadSocket = err.message.includes('ECONNREFUSED') || err.message.includes('not open');
+
+    if (isTimeout || isDeadSocket) {
+      logger.error({ err: err.message, instanceSlug }, 'Connection verification FAILED — zombie session detected');
+      // Clear success cache for this instance
+      if (instanceSlug) verifyCache.delete(instanceSlug);
+      return false;
+    }
+
+    // Transient error (rate limit, network blip) — give benefit of the doubt
+    logger.warn({ err: err.message, instanceSlug }, 'Connection verification: transient error, assuming OK');
+    return true;
   }
 }
 

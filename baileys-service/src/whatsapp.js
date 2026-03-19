@@ -6,6 +6,8 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_ALERT_CHAT_ID || '7560535072';
 
 export async function sendTelegramAlert(message) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -15,9 +17,16 @@ export async function sendTelegramAlert(message) {
         text: message,
         parse_mode: 'HTML',
       }),
+      signal: controller.signal,
     });
   } catch (err) {
-    logger.error({ err: err.message }, 'Failed to send Telegram alert');
+    if (err.name === 'AbortError') {
+      logger.warn('Telegram alert timed out (5s)');
+    } else {
+      logger.error({ err: err.message }, 'Failed to send Telegram alert');
+    }
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

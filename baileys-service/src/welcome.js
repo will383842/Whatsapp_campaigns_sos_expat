@@ -25,6 +25,12 @@ const laravelClient = axios.create({
  */
 export function registerWelcomeListener(sock) {
   sock.ev.on('group-participants.update', async (event) => {
+    // Skip if socket is no longer valid (replaced by reconnection)
+    if (!sock?.user?.id) {
+      log.warn('Welcome listener: socket disconnected, skipping event');
+      return;
+    }
+
     const groupJid = event.id;
     const groupWaId = groupJid.replace('@g.us', '');
 
