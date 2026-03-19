@@ -312,7 +312,7 @@ function BulkDateEditor({
   onDone: () => void
 }) {
   const editableMessages = [...messages]
-    .filter((m) => m.status === 'pending' || m.status === 'partially_sent')
+    .filter((m) => m.status === 'pending' || m.status === 'partially_sent' || m.status === 'failed')
     .sort((a, b) => a.order_index - b.order_index)
 
   const [dates, setDates] = useState<Record<number, string>>(() => {
@@ -702,9 +702,9 @@ function MessageAccordion({ msg, index, seriesId, isAdmin }: { msg: CampaignMess
   const qc = useQueryClient()
   const forceSend = useForceSendMessage(seriesId)
 
-  const isEditable = msg.status === 'pending' || msg.status === 'partially_sent'
-  const isSent = msg.status === 'sent' || msg.status === 'failed'
-  const canForceSend = msg.status === 'partially_sent' || msg.status === 'pending'
+  const isEditable = msg.status === 'pending' || msg.status === 'partially_sent' || msg.status === 'failed'
+  const isSent = msg.status === 'sent'
+  const canForceSend = msg.status === 'partially_sent' || msg.status === 'pending' || msg.status === 'failed'
   const hasBeenSent = msg.status === 'sent' || msg.status === 'partially_sent' || msg.status === 'failed' || msg.status === 'sending'
 
   const updateMsg = useMutation({
@@ -1257,7 +1257,7 @@ export default function SeriesDetail() {
             ) : (
               <>
                 {/* Bulk date edit button */}
-                {isAdmin && (series.messages ?? []).some((m) => m.status === 'pending' || m.status === 'partially_sent') && (
+                {isAdmin && (series.messages ?? []).some((m) => m.status === 'pending' || m.status === 'partially_sent' || m.status === 'failed') && (
                   <div className="flex justify-end mb-1">
                     <button
                       onClick={() => setEditingDates(true)}

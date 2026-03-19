@@ -80,9 +80,9 @@ class MessageController extends Controller
     {
         $message = CampaignMessage::where('series_id', $seriesId)->findOrFail($messageId);
 
-        if (! in_array($message->status, ['pending', 'partially_sent'], true)) {
+        if (! in_array($message->status, ['pending', 'partially_sent', 'failed'], true)) {
             return response()->json([
-                'message' => 'Seuls les messages en attente peuvent être modifiés.',
+                'message' => 'Seuls les messages en attente, partiellement envoyés ou échoués peuvent être modifiés.',
             ], 422);
         }
 
@@ -186,9 +186,9 @@ class MessageController extends Controller
     {
         $message = CampaignMessage::where('series_id', $seriesId)->findOrFail($messageId);
 
-        if (! in_array($message->status, ['partially_sent', 'pending'], true)) {
+        if (! in_array($message->status, ['partially_sent', 'pending', 'failed'], true)) {
             return response()->json([
-                'message' => 'Seuls les messages en attente ou partiellement envoyés peuvent être forcés.',
+                'message' => 'Seuls les messages en attente, partiellement envoyés ou échoués peuvent être forcés.',
             ], 422);
         }
 
@@ -200,14 +200,18 @@ class MessageController extends Controller
         }
 
         DB::transaction(function () use ($message) {
-            // Remove quota_exceeded logs so buildTargets sees them as unsent
+            // Remove quota_exceeded and failed logs so buildTargets sees them as unsent
             $deleted = SendLog::where('message_id', $message->id)
-                ->where('status', 'quota_exceeded')
+                ->whereIn('status', ['quota_exceeded', 'failed'])
+                ->where(function ($query) {
+                    $query->where('error_message', '!=', 'skipped')
+                          ->orWhereNull('error_message');
+                })
                 ->delete();
 
             $message->update(['status' => 'sending']);
 
-            Log::info("MessageController::forceSend — message #{$message->id} force-dispatched, {$deleted} quota_exceeded logs cleared.");
+            Log::info("MessageController::forceSend — message #{$message->id} force-dispatched, {$deleted} quota_exceeded/failed logs cleared.");
         });
 
         dispatch(new SendMessageJob($message->id));
